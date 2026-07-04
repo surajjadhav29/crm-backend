@@ -97,11 +97,29 @@ app.use((err, _req, res, _next) => {
 });
 
 if (require.main === module) {
-    const port = process.env.PORT || 5000;
+    const port = Number(process.env.PORT || 5000);
+
+    function startServer(currentPort) {
+        const server = app.listen(currentPort, () => {
+            console.log(`Server listening on port ${currentPort}`);
+        });
+
+        server.on('error', (error) => {
+            if (error.code === 'EADDRINUSE') {
+                const nextPort = currentPort + 1;
+                console.warn(`Port ${currentPort} is busy. Trying ${nextPort} instead.`);
+                server.close(() => startServer(nextPort));
+                return;
+            }
+
+            console.error('Failed to start server:', error.message);
+            process.exit(1);
+        });
+    }
 
     ensureDatabaseConnection()
         .then(() => {
-            app.listen(port, () => console.log(`Server listening on port ${port}`));
+            startServer(port);
         })
         .catch((err) => {
             console.error('Failed to connect to MongoDB:', err.message);
