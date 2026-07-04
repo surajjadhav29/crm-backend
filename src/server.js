@@ -62,11 +62,25 @@ async function ensureDatabaseConnection() {
     return dbConnectionPromise;
 }
 
-app.use(async(_req, _res, next) => {
+app.get('/', (_req, res) => res.json({ ok: true, service: 'crm-backend' }));
+
+app.get('/api/health', (_req, res) => {
+    res.json({
+        ok: true,
+        dbConfigured: Boolean(process.env.MONGODB_URI),
+        dbConnected: require('mongoose').connection.readyState === 1,
+    });
+});
+
+app.use('/api', async(req, res, next) => {
     try {
         await ensureDatabaseConnection();
         next();
     } catch (error) {
+        if (error.code === 'MISSING_ENV') {
+            return res.status(503).json({ error: 'Database is not configured', message: error.message });
+        }
+
         next(error);
     }
 });
@@ -75,8 +89,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 app.use((err, _req, res, _next) => {
     if (err.message === 'Not allowed by CORS') {

@@ -8,8 +8,21 @@ async function connectDB() {
         throw error;
     }
 
+    if (mongoose.connection.readyState === 1) {
+        return mongoose.connection;
+    }
+
+    if (mongoose.connection.readyState === 2) {
+        await new Promise((resolve, reject) => {
+            mongoose.connection.once('connected', resolve);
+            mongoose.connection.once('error', reject);
+        });
+        return mongoose.connection;
+    }
+
     await mongoose.connect(uri);
     console.log('MongoDB connected');
+    return mongoose.connection;
 }
 
 module.exports = connectDB;
