@@ -9,19 +9,42 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 
 const app = express();
 
-const allowedOrigins = (process.env.CLIENT_URL || '')
+const configuredOrigins = (process.env.CLIENT_URL || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
 
+const defaultOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+];
+
+const allowedOrigins = new Set([...defaultOrigins, ...configuredOrigins]);
+
+function isAllowedOrigin(origin) {
+    if (!origin) {
+        return true;
+    }
+
+    if (allowedOrigins.has(origin)) {
+        return true;
+    }
+
+    return /https:\/\/.*\.vercel\.(app|dev)$/i.test(origin);
+}
+
 app.use(
     cors({
         origin(origin, callback) {
-            if (!origin || allowedOrigins.includes(origin)) {
+            if (isAllowedOrigin(origin)) {
                 return callback(null, true);
             }
-            return callback(new Error('Not allowed by CORS'));
+
+            return callback(null, false);
         },
+        credentials: true,
     })
 );
 app.use(express.json());
@@ -56,6 +79,9 @@ app.use('/api/dashboard', dashboardRoutes);
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 app.use((err, _req, res, _next) => {
+    if (err.message === 'Not allowed by CORS') {
+        return res.status(403).json({ error: 'Not allowed by CORS' });
+    }
     if (err.code === 11000) {
         const field = Object.keys(err.keyPattern || {})[0] || 'value';
         return res.status(409).json({ error: `A record with this ${field} already exists` });
