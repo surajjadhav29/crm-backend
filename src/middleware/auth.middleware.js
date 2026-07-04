@@ -2,26 +2,27 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 async function requireAuth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
 
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
-  try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(payload.sub);
-
-    if (!user || !user.isActive) {
-      return res.status(401).json({ error: 'Not authenticated' });
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    req.user = user;
-    next();
-  } catch {
-    return res.status(401).json({ error: 'Session expired, please log in again' });
-  }
+    try {
+        const jwtSecret = process.env.JWT_SECRET || 'change-this-in-vercel-env';
+        const payload = jwt.verify(token, jwtSecret);
+        const user = await User.findById(payload.sub);
+
+        if (!user || !user.isActive) {
+            return res.status(401).json({ error: 'Not authenticated' });
+        }
+
+        req.user = user;
+        next();
+    } catch {
+        return res.status(401).json({ error: 'Session expired, please log in again' });
+    }
 }
 
 module.exports = requireAuth;
