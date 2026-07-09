@@ -3,6 +3,7 @@ const requireAuth = require('../middleware/auth.middleware');
 const asyncHandler = require('../middleware/asyncHandler');
 const {
   list,
+  paginatedList,
   getOne,
   create,
   update,
@@ -16,6 +17,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/', asyncHandler(list));
+router.get('/paginated', asyncHandler(paginatedList));
 router.post('/', asyncHandler(create));
 router.get('/:id', asyncHandler(getOne));
 router.put('/:id', asyncHandler(update));

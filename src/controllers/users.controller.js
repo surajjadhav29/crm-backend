@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const File = require('../models/File');
 
 const ROLES = ['superadmin', 'staff'];
 
@@ -78,4 +79,31 @@ async function update(req, res) {
   return res.status(200).json({ user: user.toJSON() });
 }
 
-module.exports = { list, create, update };
+async function remove(req, res) {
+  const { id } = req.params;
+
+  if (id === req.user._id.toString()) {
+    return res.status(400).json({ error: 'You cannot delete your own account' });
+  }
+
+  const user = await User.findById(id);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  if (user.role === 'superadmin') {
+    const superadminCount = await User.countDocuments({ role: 'superadmin' });
+    if (superadminCount <= 1) {
+      return res.status(400).json({ error: 'Cannot delete the last superadmin' });
+    }
+  }
+
+  const targetAdmin = await User.findOne({ role: 'superadmin', _id: { $ne: user._id } }).sort({
+    createdAt: 1,
+  });
+  await File.updateMany({ createdBy: user._id }, { createdBy: targetAdmin._id });
+  await user.deleteOne();
+  return res.status(200).json({ success: true });
+}
+
+module.exports = { list, create, update, remove };

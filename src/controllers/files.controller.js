@@ -113,6 +113,22 @@ async function list(req, res) {
   return res.status(200).json({ files: filtered.map((f) => f.toJSON()), total: filtered.length });
 }
 
+async function paginatedList(req, res) {
+  const { status = 'all_records', search = '' } = req.query;
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 10));
+
+  const files = await scopedFiles(req);
+  const filtered = files.filter((f) => matchesView(f, status) && matchesSearch(f, search));
+
+  const totalCount = filtered.length;
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const start = (page - 1) * pageSize;
+  const data = filtered.slice(start, start + pageSize).map((f) => f.toJSON());
+
+  return res.status(200).json({ data, totalCount, currentPage: page, pageSize, totalPages });
+}
+
 async function stats(req, res) {
   const files = await scopedFiles(req);
   return res.status(200).json(computeStats(files));
@@ -166,9 +182,12 @@ async function update(req, res) {
 }
 
 async function updateStatus(req, res) {
-  const { status } = req.body;
+  const { status, remarks } = req.body;
   if (!STATUSES.includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
+  }
+  if (status === 'objection' && (!remarks || !remarks.trim())) {
+    return res.status(400).json({ error: 'Description is required for objection status' });
   }
 
   const file = await File.findById(req.params.id);
@@ -177,6 +196,7 @@ async function updateStatus(req, res) {
   }
 
   file.status = status;
+  if (remarks !== undefined) file.remarks = remarks;
   await file.save();
   return res.status(200).json({ success: true, file: file.toJSON() });
 }
@@ -198,6 +218,7 @@ async function updateExpenses(req, res) {
 
   file.expenses = expenses;
   file.totalBill = Object.values(expenses).reduce((sum, v) => sum + v, 0);
+  file.paymentDone = Boolean(req.body.paymentDone);
   await file.save();
   return res.status(200).json({ success: true, file: file.toJSON() });
 }
@@ -212,4 +233,18 @@ async function remove(req, res) {
   return res.status(200).json({ success: true });
 }
 
-module.exports = { list, stats, getOne, create, update, updateStatus, updateExpenses, remove };
+module.exports = {
+  list,
+  paginatedList,
+  stats,
+  getOne,
+  create,
+  update,
+  updateStatus,
+  updateExpenses,
+  remove,
+  scopedFiles,
+  isHoldFile,
+  matchesView,
+  matchesSearch,
+};

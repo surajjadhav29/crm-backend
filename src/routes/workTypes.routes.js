@@ -1,10 +1,13 @@
 const express = require('express');
 const requireAuth = require('../middleware/auth.middleware');
 const asyncHandler = require('../middleware/asyncHandler');
-const { stats } = require('../controllers/dashboard.controller');
+const { list, create } = require('../controllers/workTypes.controller');
 
 const router = express.Router();
 
-router.get('/stats', requireAuth, asyncHandler(stats));
+router.use(requireAuth);
+
+router.get('/', asyncHandler(list));
+router.post('/', asyncHandler(create));
 
 module.exports = router;

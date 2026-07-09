@@ -35,6 +35,7 @@ const fileSchema = new mongoose.Schema(
     rtoName: { type: String, required: true },
     remarks: { type: String, default: '' },
     totalBill: { type: Number, default: 0 },
+    paymentDone: { type: Boolean, default: false },
     expenses: { type: expensesSchema, default: () => ({}) },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   },

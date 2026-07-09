@@ -6,6 +6,7 @@ const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
 const filesRoutes = require('./routes/files.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
+const workTypesRoutes = require('./routes/workTypes.routes');
 
 const app = express();
 
@@ -89,6 +90,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/work-types', workTypesRoutes);
 
 app.use((err, _req, res, _next) => {
     if (err.message === 'Not allowed by CORS') {
