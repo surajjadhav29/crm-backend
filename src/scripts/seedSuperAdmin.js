@@ -1,8 +1,7 @@
-require('dotenv').config();
-const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
-const connectDB = require('../config/db');
+const { connectDB } = require('../config/db');
 const User = require('../models/User');
+const { hashPassword } = require('../utils/password');
 
 async function run() {
   const fullName = process.env.SUPERADMIN_FULLNAME;
@@ -28,12 +27,11 @@ async function run() {
     return;
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
   await User.create({
     fullName,
     email: email.toLowerCase(),
     username: username.toLowerCase(),
-    passwordHash,
+    passwordHash: await hashPassword(password),
     role: 'superadmin',
     isActive: true,
   });
