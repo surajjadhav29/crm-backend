@@ -8,6 +8,14 @@ function errorHandler(err, _req, res, _next) {
     return res.status(err.statusCode).json(body);
   }
 
+  // Multer upload errors (file size / unexpected field, etc.).
+  if (err.name === 'MulterError') {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'Excel file is too large (max 5 MB)' });
+    }
+    return res.status(400).json({ error: err.message || 'Upload failed' });
+  }
+
   // Malformed JSON body (from express.json()).
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON in request body' });
