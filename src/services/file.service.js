@@ -1,8 +1,9 @@
 const File = require('../models/File');
 const Counter = require('../models/Counter');
 const User = require('../models/User');
+const WorkType = require('../models/WorkType');
 const ApiError = require('../utils/apiError');
-const { exactInsensitive } = require('../utils/regex');
+const { escapeRegex, exactInsensitive } = require('../utils/regex');
 const { isValidObjectId } = require('../utils/objectId');
 const {
   FILE_STATUSES,
@@ -15,6 +16,8 @@ const {
   FILE_NUMBER_BASE,
   FILE_NUMBER_COUNTER_ID,
 } = require('../constants/file.constants');
+const { normalizeDocuments, normalizeWorkTypeName } = require('../constants/workType.constants');
+const { todayDateString, dateStringDaysAgo } = require('../utils/date');
 
 /* ------------------------------------------------------------------ */
 /* Pure domain helpers (no I/O) — reusable across services            */
@@ -23,9 +26,10 @@ const {
 function isHoldFile(file) {
   if (file.status === 'on_hold') return true;
   if (file.status !== 'pending') return false;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - HOLD_DAYS);
-  return new Date(file.date) < cutoff;
+  const fileDay = String(file.date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fileDay)) return false;
+  const cutoff = dateStringDaysAgo(HOLD_DAYS);
+  return fileDay < cutoff;
 }
 
 function matchesView(file, type) {
@@ -48,6 +52,70 @@ function matchesView(file, type) {
     default:
       return true;
   }
+}
+
+/** Mongo filter fragment for a Files tab / export view. */
+function buildViewQuery(type) {
+  switch (type) {
+    case 'all':
+      return { status: { $in: ['pending', 'in_progress'] } };
+    case 'hold': {
+      const cutoff = dateStringDaysAgo(HOLD_DAYS);
+      return {
+        $or: [{ status: 'on_hold' }, { status: 'pending', date: { $lt: cutoff } }],
+      };
+    }
+    case 'return_paper':
+      return { status: 'paper_return' };
+    case 'objection':
+      return { status: 'objection' };
+    case 'pending':
+      return { status: 'pending' };
+    case 'in_progress':
+      return { status: 'in_progress' };
+    case 'completed':
+      return { status: { $in: ['completed', 'done'] } };
+    case 'all_records':
+    default:
+      return {};
+  }
+}
+
+function buildSearchQuery(search) {
+  if (!search || !String(search).trim()) return null;
+  const re = new RegExp(escapeRegex(String(search).trim()), 'i');
+  return {
+    $or: [
+      { fileNumber: re },
+      { ownerName: re },
+      { oldOwnerName: re },
+      { vehicleNo: re },
+      { vehicleModel: re },
+      { dealerName: re },
+      { workType: re },
+      { rtoName: re },
+    ],
+  };
+}
+
+function buildListQuery(
+  user,
+  { type = 'all_records', search = '', filterUserId, rtoName, workType, dealerName } = {}
+) {
+  const parts = [buildScopeQuery(user, filterUserId)];
+
+  const view = buildViewQuery(type);
+  if (Object.keys(view).length) parts.push(view);
+
+  if (rtoName) parts.push({ rtoName });
+  if (workType) parts.push({ workType });
+  if (dealerName) parts.push({ dealerName });
+
+  const searchQuery = buildSearchQuery(search);
+  if (searchQuery) parts.push(searchQuery);
+
+  if (parts.length === 1) return parts[0];
+  return { $and: parts };
 }
 
 // Column filters (exact match). Empty/undefined values are ignored so callers
@@ -76,7 +144,9 @@ function matchesSearch(file, search) {
 }
 
 function requiresNewOwner(workType) {
-  return NEW_OWNER_WORK_TYPES.includes((workType || '').toUpperCase().replace(/\s+/g, ''));
+  const normalized = (workType || '').toUpperCase().replace(/\s+/g, '');
+  if (NEW_OWNER_WORK_TYPES.includes(normalized)) return true;
+  return normalized === 'TO' || normalized.startsWith('TO+') || normalized.startsWith('TO&');
 }
 
 // Canonical form for a vehicle number: no spaces, upper-cased. This makes
@@ -131,6 +201,22 @@ function canAccess(file, user) {
   return user.role === 'superadmin' || file.createdBy.toString() === user._id.toString();
 }
 
+/**
+ * Serialize a file for API responses.
+ * Staff never receive setDeal (and totalBill excludes it so it cannot be inferred).
+ */
+function toPublicFile(file, user) {
+  const json = typeof file.toJSON === 'function' ? file.toJSON() : { ...file };
+  if (user?.role === 'superadmin') return json;
+
+  const setDeal = Number(json.expenses?.setDeal) || 0;
+  if (json.expenses) {
+    json.expenses = { ...json.expenses, setDeal: 0 };
+  }
+  json.totalBill = Math.max(0, (Number(json.totalBill) || 0) - setDeal);
+  return json;
+}
+
 /* ------------------------------------------------------------------ */
 /* Data access helpers                                                 */
 /* ------------------------------------------------------------------ */
@@ -145,6 +231,7 @@ function buildScopeQuery(user, filterUserId) {
   return query;
 }
 
+/** @deprecated Prefer buildListQuery — kept for rare callers that need every scoped doc. */
 async function getScopedFiles(user, filterUserId) {
   return File.find(buildScopeQuery(user, filterUserId)).sort({ createdAt: -1 });
 }
@@ -166,17 +253,20 @@ async function nextFileNumber() {
   return `${FILE_NUMBER_PREFIX}${FILE_NUMBER_BASE + counter.seq}`;
 }
 
-async function findDuplicateVehicle(vehicleNo, excludeId) {
-  const query = { vehicleNo: exactInsensitive(vehicleNo) };
+async function findDuplicateFile(vehicleNo, workType, excludeId) {
+  const query = {
+    vehicleNo: exactInsensitive(vehicleNo),
+    workType: exactInsensitive(workType),
+  };
   if (excludeId) query._id = { $ne: excludeId };
   return File.findOne(query);
 }
 
-async function assertVehicleUnique(vehicleNo, excludeId) {
-  if (await findDuplicateVehicle(vehicleNo, excludeId)) {
+async function assertFileUnique(vehicleNo, workType, excludeId) {
+  if (await findDuplicateFile(vehicleNo, workType, excludeId)) {
     throw ApiError.conflict(
-      `A file already exists for vehicle number ${vehicleNo}`,
-      'DUPLICATE_VEHICLE'
+      `A file already exists for vehicle ${vehicleNo} with work type ${workType}`,
+      'DUPLICATE_FILE'
     );
   }
 }
@@ -186,7 +276,41 @@ function pickEditableFields(body) {
   for (const field of EDITABLE_FIELDS) {
     if (body[field] !== undefined) payload[field] = body[field];
   }
+  if (payload.documents !== undefined) {
+    payload.documents = normalizeDocuments(payload.documents);
+  }
+  if (payload.requiredDocuments !== undefined) {
+    payload.requiredDocuments = normalizeDocuments(payload.requiredDocuments);
+  }
   return payload;
+}
+
+/** Load WorkType from catalog. Lookup collapses spaces / case. */
+async function findWorkTypeOrThrow(workType) {
+  const name = normalizeWorkTypeName(workType);
+  if (!name) {
+    throw ApiError.badRequest('Work type is required');
+  }
+  const wt = await WorkType.findOne({ name: exactInsensitive(name) });
+  if (!wt) {
+    throw ApiError.badRequest(
+      `Work type "${name}" is not in the catalog. Add it under Work Types first.`
+    );
+  }
+  return wt;
+}
+
+/**
+ * Resolve required docs from catalog. Always returns canonical workType name
+ * so File.workType matches WorkType.name (filters / rename / delete-guard).
+ */
+async function resolveWorkTypeSnapshot(workType, provided) {
+  const wt = await findWorkTypeOrThrow(workType);
+  const requiredDocuments =
+    Array.isArray(provided) && provided.length
+      ? normalizeDocuments(provided)
+      : normalizeDocuments(wt.documents || []);
+  return { workType: wt.name, requiredDocuments };
 }
 
 /* ------------------------------------------------------------------ */
@@ -221,14 +345,16 @@ async function listFiles(
   user,
   { type = 'all', search = '', filterUserId, rtoName, workType, dealerName } = {}
 ) {
-  const files = await getScopedFiles(user, filterUserId);
-  const filtered = files.filter(
-    (f) =>
-      matchesView(f, type) &&
-      matchesSearch(f, search) &&
-      matchesFilters(f, { rtoName, workType, dealerName })
-  );
-  return { files: filtered.map((f) => f.toJSON()), total: filtered.length };
+  const query = buildListQuery(user, {
+    type,
+    search,
+    filterUserId,
+    rtoName,
+    workType,
+    dealerName,
+  });
+  const files = await File.find(query).sort({ createdAt: -1 });
+  return { files: files.map((f) => toPublicFile(f, user)), total: files.length };
 }
 
 async function paginateFiles(
@@ -246,26 +372,40 @@ async function paginateFiles(
 ) {
   const safePage = Math.max(1, parseInt(page, 10) || 1);
   const safeSize = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 10));
+  const query = buildListQuery(user, {
+    type: status,
+    search,
+    filterUserId,
+    rtoName,
+    workType,
+    dealerName,
+  });
 
-  const files = await getScopedFiles(user, filterUserId);
-  const filtered = files.filter(
-    (f) =>
-      matchesView(f, status) &&
-      matchesSearch(f, search) &&
-      matchesFilters(f, { rtoName, workType, dealerName })
-  );
+  const [totalCount, rows] = await Promise.all([
+    File.countDocuments(query),
+    File.find(query)
+      .sort({ createdAt: -1 })
+      .skip((safePage - 1) * safeSize)
+      .limit(safeSize),
+  ]);
 
-  const totalCount = filtered.length;
   const totalPages = Math.ceil(totalCount / safeSize) || 0;
-  const start = (safePage - 1) * safeSize;
-  const data = filtered.slice(start, start + safeSize).map((f) => f.toJSON());
+  const data = rows.map((f) => toPublicFile(f, user));
 
   return { data, totalCount, currentPage: safePage, pageSize: safeSize, totalPages };
 }
 
+async function listDealerNames(user, filterUserId) {
+  const names = await File.distinct('dealerName', buildScopeQuery(user, filterUserId));
+  return names
+    .map((n) => String(n || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 async function getFile(user, id) {
   const file = await getAccessibleFile(id, user);
-  return file.toJSON();
+  return toPublicFile(file, user);
 }
 
 async function createFile(user, body) {
@@ -279,18 +419,30 @@ async function createFile(user, body) {
   assertValidFileFields(payload);
 
   payload.vehicleNo = normalizeVehicleNo(payload.vehicleNo);
-  await assertVehicleUnique(payload.vehicleNo);
 
+  // Persist catalog-canonical work type name (not the raw client/Excel string).
+  const snapshot = await resolveWorkTypeSnapshot(payload.workType, payload.requiredDocuments);
+  payload.workType = snapshot.workType;
+  payload.requiredDocuments = snapshot.requiredDocuments;
+  if (payload.documents === undefined) {
+    payload.documents = [];
+  }
+
+  // Duplicate = same vehicle + same work type (not vehicle alone).
+  await assertFileUnique(payload.vehicleNo, payload.workType);
+
+  const createdAt = new Date();
   const file = await File.create({
     ...payload,
     fileNumber: await nextFileNumber(),
-    date: new Date().toISOString().split('T')[0],
+    date: todayDateString(),
     status: 'pending',
     totalBill: 0,
+    statusHistory: [{ status: 'pending', at: createdAt, note: 'File created' }],
     createdBy: user._id,
   });
 
-  return file.toJSON();
+  return toPublicFile(file, user);
 }
 
 async function updateFile(user, id, body) {
@@ -298,11 +450,26 @@ async function updateFile(user, id, body) {
 
   const payload = pickEditableFields(body);
   assertValidFileFields(payload);
+
+  if (payload.workType !== undefined) {
+    const wt = await findWorkTypeOrThrow(payload.workType);
+    const prevNorm = normalizeWorkTypeName(file.workType);
+    const changed = wt.name !== prevNorm;
+
+    payload.workType = wt.name;
+    if (changed && payload.requiredDocuments === undefined) {
+      payload.requiredDocuments = normalizeDocuments(wt.documents || []);
+    }
+  }
+
   Object.assign(file, payload);
 
-  if (body.vehicleNo !== undefined) {
-    const vehicleNo = normalizeVehicleNo(body.vehicleNo);
-    await assertVehicleUnique(vehicleNo, file._id);
+  if (body.vehicleNo !== undefined || body.workType !== undefined) {
+    const vehicleNo = normalizeVehicleNo(
+      body.vehicleNo !== undefined ? body.vehicleNo : file.vehicleNo
+    );
+    const workType = body.workType !== undefined ? payload.workType || file.workType : file.workType;
+    await assertFileUnique(vehicleNo, workType, file._id);
     file.vehicleNo = vehicleNo;
   }
 
@@ -312,7 +479,7 @@ async function updateFile(user, id, body) {
   }
 
   await file.save();
-  return file.toJSON();
+  return toPublicFile(file, user);
 }
 
 async function resolveAssignee(actingUser, targetId) {
@@ -339,6 +506,29 @@ async function updateStatus(user, id, { status, remarks } = {}) {
 
   const file = await getAccessibleFile(id, user);
 
+  // Pending files must have all required documents before any status change.
+  if (file.status === 'pending' && status !== 'pending') {
+    const required = Array.isArray(file.requiredDocuments) ? file.requiredDocuments : [];
+    if (required.length) {
+      const received = new Set(
+        (Array.isArray(file.documents) ? file.documents : []).map((d) =>
+          String(d || '')
+            .trim()
+            .toLowerCase()
+        )
+      );
+      const missing = required.filter((doc) => {
+        const key = String(doc || '')
+          .trim()
+          .toLowerCase();
+        return key && !received.has(key);
+      });
+      if (missing.length) {
+        throw ApiError.badRequest('DOC IS REQUIRED', 'DOCUMENTS_REQUIRED');
+      }
+    }
+  }
+
   if (status === 'in_progress' && requiresNewOwner(file.workType)) {
     const hasName = file.ownerName && file.ownerName.trim();
     const hasMob = file.newOwnerMob && file.newOwnerMob.trim();
@@ -350,22 +540,47 @@ async function updateStatus(user, id, { status, remarks } = {}) {
     }
   }
 
+  const previousStatus = file.status;
   file.status = status;
   if (remarks !== undefined) file.remarks = remarks;
+
+  // Append status log when status actually changes (or first history entry).
+  if (!Array.isArray(file.statusHistory)) {
+    file.statusHistory = [];
+  }
+  if (file.statusHistory.length === 0 && previousStatus) {
+    file.statusHistory.push({
+      status: previousStatus,
+      at: file.createdAt || new Date(),
+      note: 'File created',
+    });
+  }
+  if (previousStatus !== status) {
+    file.statusHistory.push({
+      status,
+      at: new Date(),
+      note: status === 'objection' && remarks ? String(remarks).trim() : '',
+    });
+  }
+
   await file.save();
-  return file.toJSON();
+  return toPublicFile(file, user);
 }
 
 async function updateExpenses(user, id, body) {
   const file = await getAccessibleFile(id, user);
 
   const expenses = normalizeExpenses(body);
+  // Only superadmin may set/change Set Deal — staff saves keep existing value
+  if (user.role !== 'superadmin') {
+    expenses.setDeal = Number(file.expenses?.setDeal) || 0;
+  }
   file.expenses = expenses;
   file.totalBill = sumExpenses(expenses);
   file.paymentDone = Boolean(body.paymentDone);
 
   await file.save();
-  return file.toJSON();
+  return toPublicFile(file, user);
 }
 
 async function deleteFile(user, id) {
@@ -374,8 +589,42 @@ async function deleteFile(user, id) {
 }
 
 async function getStatsFor(user, filterUserId) {
-  const files = await getScopedFiles(user, filterUserId);
-  return computeDashboardStats(files);
+  const match = buildScopeQuery(user, filterUserId);
+  const cutoff = dateStringDaysAgo(HOLD_DAYS);
+
+  const [byStatus, holdPending, billing] = await Promise.all([
+    File.aggregate([
+      { $match: match },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]),
+    File.countDocuments({ ...match, status: 'pending', date: { $lt: cutoff } }),
+    File.aggregate([
+      { $match: { ...match, paymentDone: false } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$totalBill', 0] } } } },
+    ]),
+  ]);
+
+  const counts = Object.fromEntries(byStatus.map((r) => [r._id, r.count]));
+  const pending = counts.pending || 0;
+  const inProcess = counts.in_progress || 0;
+  const onHold = counts.on_hold || 0;
+  const completed = (counts.completed || 0) + (counts.done || 0);
+  const objection = counts.objection || 0;
+  const returnPaper = counts.paper_return || 0;
+  const totalRecords = Object.values(counts).reduce((sum, n) => sum + n, 0);
+
+  return {
+    totalRecords,
+    pending,
+    inProcess,
+    live: pending + inProcess,
+    completed,
+    objection,
+    returnPaper,
+    holdSheet: onHold + holdPending,
+    onHold,
+    totalBilling: billing[0]?.total || 0,
+  };
 }
 
 module.exports = {
@@ -388,11 +637,12 @@ module.exports = {
   canAccess,
   // data helpers
   getScopedFiles,
-  findDuplicateVehicle,
+  findDuplicateFile,
   nextFileNumber,
   // operations
   listFiles,
   paginateFiles,
+  listDealerNames,
   getFile,
   createFile,
   updateFile,

@@ -23,22 +23,44 @@ function errorHandler(err, _req, res, _next) {
 
   // Configuration / infrastructure errors.
   if (err.code === 'MISSING_ENV') {
-    return res.status(500).json({ error: err.message });
+    return res.status(503).json({ error: err.message });
+  }
+
+  // Mongo / network blips (Atlas timeout, dropped socket, etc.).
+  const mongoTransient =
+    err.name === 'MongoNetworkError' ||
+    err.name === 'MongoServerSelectionError' ||
+    err.name === 'MongoExpiredSessionError' ||
+    err.message?.includes?.('buffering timed out') ||
+    err.message?.includes?.('ECONNREFUSED');
+  if (mongoTransient) {
+    console.error('Database temporarily unavailable:', err.message);
+    return res.status(503).json({ error: 'Database temporarily unavailable, please retry' });
   }
 
   // Mongoose duplicate key.
   if (err.code === 11000) {
-    const field = Object.keys(err.keyPattern || {})[0] || 'value';
-    if (field === 'vehicleNo') {
+    const keyPattern = err.keyPattern || {};
+    const fields = Object.keys(keyPattern);
+    if (fields.includes('vehicleNo') && fields.includes('workType')) {
+      const vehicleNo = err.keyValue?.vehicleNo || '';
+      const workType = err.keyValue?.workType || '';
+      return res.status(409).json({
+        error: `A file already exists for vehicle ${vehicleNo} with work type ${workType}`.trim(),
+        code: 'DUPLICATE_FILE',
+      });
+    }
+    if (fields.length === 1 && fields[0] === 'vehicleNo') {
       const value = err.keyValue?.vehicleNo || '';
       return res.status(409).json({
         error: `A file already exists for vehicle number ${value}`.trim(),
-        code: 'DUPLICATE_VEHICLE',
+        code: 'DUPLICATE_FILE',
       });
     }
-    if (field === 'key') {
+    if (fields.includes('key') || fields[0] === 'key') {
       return res.status(409).json({ error: 'This RTO already exists' });
     }
+    const field = fields[0] || 'value';
     return res.status(409).json({ error: `A record with this ${field} already exists` });
   }
 
@@ -48,6 +70,11 @@ function errorHandler(err, _req, res, _next) {
 
   if (err.name === 'ValidationError') {
     return res.status(400).json({ error: err.message });
+  }
+
+  // CORS rejection from cors middleware.
+  if (err.message && String(err.message).startsWith('CORS blocked')) {
+    return res.status(403).json({ error: 'Origin not allowed' });
   }
 
   console.error(err);

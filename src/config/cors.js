@@ -14,14 +14,24 @@ const configuredOrigins = env.CLIENT_URL.split(',')
 const allowedOrigins = new Set([...defaultOrigins, ...configuredOrigins]);
 
 function isAllowedOrigin(origin) {
+  // Non-browser / same-origin tools (curl, server-to-server) send no Origin.
   if (!origin) return true;
   if (allowedOrigins.has(origin)) return true;
-  return /https:\/\/.*\.vercel\.(app|dev)$/i.test(origin);
+
+  // Preview deployments only in non-production.
+  if (!env.isProduction && /https:\/\/.*\.vercel\.(app|dev)$/i.test(origin)) {
+    return true;
+  }
+
+  return false;
 }
 
 const corsOptions = {
   origin(origin, callback) {
-    return callback(null, isAllowedOrigin(origin));
+    if (isAllowedOrigin(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
   },
   credentials: true,
 };

@@ -14,6 +14,11 @@ async function list(req, res) {
   return res.status(200).json(result);
 }
 
+async function dealerNames(req, res) {
+  const dealers = await fileService.listDealerNames(req.user, req.query.userId);
+  return res.status(200).json({ dealers });
+}
+
 async function paginatedList(req, res) {
   const result = await fileService.paginateFiles(req.user, {
     status: req.query.status,
@@ -94,6 +99,7 @@ async function uploadExcel(req, res) {
 
 module.exports = {
   list,
+  dealerNames,
   paginatedList,
   getOne,
   create,

@@ -26,6 +26,8 @@ const EDITABLE_FIELDS = [
   'dealerMob',
   'rtoName',
   'remarks',
+  'documents',
+  'requiredDocuments',
 ];
 
 // Fields required to create a file.
@@ -42,7 +44,19 @@ const REQUIRED_CREATE_FIELDS = [
 ];
 
 // The expense line items that make up a file's total bill.
-const EXPENSE_FIELDS = ['challan', 'adjustment', 'puc', 'hsrp', 'insurance', 'setDeal'];
+const EXPENSE_FIELDS = [
+  'challan',
+  'adjustment',
+  'puc',
+  'hsrp',
+  'insurance',
+  'roadTax',
+  'permitCancel',
+  'duplicatePermit',
+  'newPermit',
+  'pTax',
+  'setDeal',
+];
 
 // Transfer-of-ownership work types. New owner name + mobile are optional at
 // creation, but required before the file can move to "in_progress".

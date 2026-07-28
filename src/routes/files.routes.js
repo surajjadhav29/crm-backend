@@ -7,6 +7,7 @@ const ApiError = require('../utils/apiError');
 const {
   list,
   paginatedList,
+  dealerNames,
   getOne,
   create,
   update,
@@ -56,6 +57,7 @@ router.use(requireAuth);
 
 router.get('/', asyncHandler(list));
 router.get('/paginated', asyncHandler(paginatedList));
+router.get('/dealers', asyncHandler(dealerNames));
 router.get('/excel-template', requireSystemAccount, asyncHandler(downloadExcelTemplate));
 router.post(
   '/excel-upload',

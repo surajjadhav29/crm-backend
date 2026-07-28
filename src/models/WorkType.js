@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const workTypeSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, uppercase: true, unique: true },
+    documents: { type: [String], default: [] },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   },
   {

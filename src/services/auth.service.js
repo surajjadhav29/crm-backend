@@ -19,6 +19,9 @@ async function login({ username, password } = {}) {
     throw ApiError.unauthorized('Invalid username or password');
   }
 
+  user.lastLoginAt = new Date();
+  await user.save();
+
   return { token: signToken(user), user: user.toJSON() };
 }
 

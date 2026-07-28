@@ -17,14 +17,21 @@ const EXCEL_COLUMNS = [
   { header: 'Dealer Mobile', key: 'dealerMob', required: false, width: 16 },
   { header: 'RTO', key: 'rtoName', required: true, width: 24 },
   { header: 'Remarks', key: 'remarks', required: false, width: 28 },
+  // Received documents — comma / semicolon separated (optional)
+  { header: 'Documents', key: 'documents', required: false, width: 40 },
   // Price / expense columns (optional)
   { header: 'Challan Amount', key: 'challan', required: false, width: 14, isExpense: true },
   { header: 'Adjustment Amount', key: 'adjustment', required: false, width: 16, isExpense: true },
   { header: 'PUC Amount', key: 'puc', required: false, width: 12, isExpense: true },
   { header: 'HSRP Amount', key: 'hsrp', required: false, width: 12, isExpense: true },
   { header: 'Insurance Amount', key: 'insurance', required: false, width: 16, isExpense: true },
+  { header: 'Road Tax', key: 'roadTax', required: false, width: 12, isExpense: true },
+  { header: 'Permit Cancel', key: 'permitCancel', required: false, width: 14, isExpense: true },
+  { header: 'Duplicate Permit', key: 'duplicatePermit', required: false, width: 16, isExpense: true },
+  { header: 'New Permit', key: 'newPermit', required: false, width: 12, isExpense: true },
+  { header: 'P-tax', key: 'pTax', required: false, width: 10, isExpense: true },
   { header: 'Set Deal Amount', key: 'setDeal', required: false, width: 14, isExpense: true },
-  { header: 'Payment Done', key: 'paymentDone', required: false, width: 14, isExpense: true },
+  { header: 'Payment Done', key: 'paymentDone', required: false, width: 14 },
 ];
 
 module.exports = {

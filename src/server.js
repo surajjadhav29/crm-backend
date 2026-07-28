@@ -1,6 +1,7 @@
 const env = require('./config/env');
 const app = require('./app');
 const { ensureDatabaseConnection } = require('./config/db');
+const File = require('./models/File');
 
 function startServer(currentPort) {
   const server = app.listen(currentPort, () => {
@@ -23,7 +24,15 @@ function startServer(currentPort) {
 // as a serverless handler instead.
 if (require.main === module) {
   ensureDatabaseConnection()
-    .then(() => startServer(env.PORT))
+    .then(async () => {
+      // Drop old vehicleNo-only unique index; ensure compound (vehicleNo + workType).
+      try {
+        await File.syncIndexes();
+      } catch (err) {
+        console.warn('File.syncIndexes:', err.message);
+      }
+      startServer(env.PORT);
+    })
     .catch((err) => {
       console.error('Failed to connect to MongoDB:', err.message);
       process.exit(1);
