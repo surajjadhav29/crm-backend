@@ -4,7 +4,7 @@ const User = require('../models/User');
 const WorkType = require('../models/WorkType');
 const ApiError = require('../utils/apiError');
 const { escapeRegex, exactInsensitive } = require('../utils/regex');
-const { isValidObjectId } = require('../utils/objectId');
+const { isValidObjectId, toObjectId } = require('../utils/objectId');
 const {
   FILE_STATUSES,
   EDITABLE_FIELDS,
@@ -226,7 +226,9 @@ function buildScopeQuery(user, filterUserId) {
   if (user.role !== 'superadmin') {
     query.createdBy = user._id;
   } else if (filterUserId) {
-    query.createdBy = filterUserId;
+    // Aggregate $match needs a real ObjectId; string ids match 0 docs.
+    const oid = toObjectId(filterUserId);
+    query.createdBy = oid || filterUserId;
   }
   return query;
 }
@@ -588,8 +590,22 @@ async function deleteFile(user, id) {
   await file.deleteOne();
 }
 
-async function getStatsFor(user, filterUserId) {
-  const match = buildScopeQuery(user, filterUserId);
+async function getStatsFor(user, filterUserIdOrOpts) {
+  // Supports legacy `getStatsFor(user, userIdString)` and
+  // `getStatsFor(user, { filterUserId, rtoName, workType, dealerName, search })`.
+  const opts =
+    filterUserIdOrOpts && typeof filterUserIdOrOpts === 'object'
+      ? filterUserIdOrOpts
+      : { filterUserId: filterUserIdOrOpts };
+
+  const match = buildListQuery(user, {
+    type: 'all_records',
+    search: opts.search || '',
+    filterUserId: opts.filterUserId,
+    rtoName: opts.rtoName,
+    workType: opts.workType,
+    dealerName: opts.dealerName,
+  });
   const cutoff = dateStringDaysAgo(HOLD_DAYS);
 
   const [byStatus, holdPending, billing] = await Promise.all([
@@ -597,9 +613,11 @@ async function getStatsFor(user, filterUserId) {
       { $match: match },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]),
-    File.countDocuments({ ...match, status: 'pending', date: { $lt: cutoff } }),
+    File.countDocuments({
+      $and: [match, { status: 'pending', date: { $lt: cutoff } }],
+    }),
     File.aggregate([
-      { $match: { ...match, paymentDone: false } },
+      { $match: { $and: [match, { paymentDone: false }] } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$totalBill', 0] } } } },
     ]),
   ]);

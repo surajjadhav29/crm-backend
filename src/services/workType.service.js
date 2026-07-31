@@ -54,6 +54,31 @@ async function createWorkType(user, { name, documents } = {}) {
 }
 
 /**
+ * Find work type or create it (Excel bulk). Documents are catalog names only —
+ * unknown names are dropped by normalizeDocuments (no new document types).
+ */
+async function ensureWorkType(user, { name, documents } = {}) {
+  const normalized = normalizeWorkTypeName(name);
+  if (!normalized) {
+    throw ApiError.badRequest('Work type is required');
+  }
+
+  const existing = await findByNameInsensitive(normalized);
+  if (existing) return existing.toJSON();
+
+  try {
+    return await createWorkType(user, { name: normalized, documents });
+  } catch (err) {
+    // Parallel Excel rows may race on the same new work type.
+    if (err.statusCode === 409) {
+      const again = await findByNameInsensitive(normalized);
+      if (again) return again.toJSON();
+    }
+    throw err;
+  }
+}
+
+/**
  * Persist rename + cascade file.workType updates atomically when Mongo
  * transactions are available; otherwise save then cascade with rollback.
  */
@@ -171,6 +196,7 @@ module.exports = {
   listWorkTypes,
   getWorkType,
   createWorkType,
+  ensureWorkType,
   updateWorkType,
   deleteWorkType,
   normalizeWorkTypeName,

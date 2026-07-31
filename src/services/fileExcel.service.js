@@ -7,6 +7,8 @@ const {
   normalizeDocuments,
 } = require('../constants/workType.constants');
 const fileService = require('./file.service');
+const workTypeService = require('./workType.service');
+const rtoService = require('./rto.service');
 
 /** Required for a row to be created — missing any of these skips the record. */
 const REQUIRED_ROW_FIELDS = [
@@ -127,6 +129,7 @@ async function buildExcelTemplateBuffer() {
       duplicatePermit: 0,
       newPermit: 0,
       pTax: 0,
+      urgent: 0,
       setDeal: 2500,
       paymentDone: 'No',
     });
@@ -160,6 +163,7 @@ async function buildExcelTemplateBuffer() {
       'duplicatePermit',
       'newPermit',
       'pTax',
+      'urgent',
       'setDeal',
     ].forEach((key) => {
       sheet.getColumn(key).numFmt = '#,##0.00';
@@ -183,7 +187,13 @@ async function buildExcelTemplateBuffer() {
       'Documents: comma-separated (or semicolon), e.g. RC, Form 29, Old aadhar. Use exact names from the "Documents" sheet.',
     ]);
     notes.addRow([
-      'Prices: Challan / Adjustment / PUC / HSRP / Insurance / Road Tax / Permit Cancel / Duplicate Permit / New Permit / P-tax / Set Deal — empty → 0. Payment Done empty → No',
+      'Prices: Challan / Adjustment / PUC / HSRP / Insurance / Road Tax / Permit Cancel / Duplicate Permit / New Permit / P-tax / Urgent / Set Deal — empty → 0. Payment Done empty → No',
+    ]);
+    notes.addRow([
+      'Work Type: if the name is new, it is auto-created. Documents column (comma-separated) becomes that work type checklist — catalog names only (see Documents sheet). No new document types.',
+    ]);
+    notes.addRow([
+      'RTO: if the name is new (not in built-in MH list), it is auto-added to the RTO list.',
     ]);
     notes.addRow([
       'Vehicle No + Work Type must be unique — same vehicle with the same work type is rejected; different work type is allowed.',
@@ -311,6 +321,7 @@ function rowToPayload(row, columnMap) {
     duplicatePermit: excelAmount(raw.duplicatePermit),
     newPermit: excelAmount(raw.newPermit),
     pTax: excelAmount(raw.pTax),
+    urgent: excelAmount(raw.urgent),
     setDeal: excelAmount(raw.setDeal),
   };
   // Empty / missing Payment Done → No (false)
@@ -390,6 +401,7 @@ function buildFailedRow(rowNumber, filePayload, expenses, paymentDone, error) {
       duplicatePermit: expenses?.duplicatePermit ?? 0,
       newPermit: expenses?.newPermit ?? 0,
       pTax: expenses?.pTax ?? 0,
+      urgent: expenses?.urgent ?? 0,
       setDeal: expenses?.setDeal ?? 0,
       paymentDone: paymentDone ? 'Yes' : 'No',
     },
@@ -457,6 +469,9 @@ async function importFilesFromExcel(user, buffer) {
   const errors = [];
   // Block duplicate Vehicle No + Work Type inside the same Excel upload.
   const seenPairs = new Map();
+  // Cache ensures so the same new work type / RTO is only created once per upload.
+  const ensuredWorkTypes = new Set();
+  const ensuredRtos = new Set();
 
   const dataRows = [];
   sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
@@ -470,7 +485,7 @@ async function importFilesFromExcel(user, buffer) {
       parsed = rowToPayload(row, columnMap);
     } catch (err) {
       errors.push(
-        buildFailedRow(rowNumber, {}, { challan: 0, adjustment: 0, puc: 0, hsrp: 0, insurance: 0, roadTax: 0, permitCancel: 0, duplicatePermit: 0, newPermit: 0, pTax: 0, setDeal: 0 }, false, err.message || 'Failed to read row')
+        buildFailedRow(rowNumber, {}, { challan: 0, adjustment: 0, puc: 0, hsrp: 0, insurance: 0, roadTax: 0, permitCancel: 0, duplicatePermit: 0, newPermit: 0, pTax: 0, urgent: 0, setDeal: 0 }, false, err.message || 'Failed to read row')
       );
       continue;
     }
@@ -518,6 +533,36 @@ async function importFilesFromExcel(user, buffer) {
           expenses,
           paymentDone,
           `${formatIssues.join('; ')}. Record not uploaded.`
+        )
+      );
+      continue;
+    }
+
+    // Auto-create missing Work Type (Documents → checklist) and RTO if needed.
+    try {
+      const wtKey = filePayload.workType;
+      if (!ensuredWorkTypes.has(wtKey)) {
+        await workTypeService.ensureWorkType(user, {
+          name: filePayload.workType,
+          // Catalog-only names; used only when creating a brand-new work type.
+          documents: filePayload.documents || [],
+        });
+        ensuredWorkTypes.add(wtKey);
+      }
+
+      const rtoKeyName = String(filePayload.rtoName || '').trim().toUpperCase();
+      if (rtoKeyName && !ensuredRtos.has(rtoKeyName)) {
+        await rtoService.ensureRto(user, filePayload.rtoName);
+        ensuredRtos.add(rtoKeyName);
+      }
+    } catch (err) {
+      errors.push(
+        buildFailedRow(
+          rowNumber,
+          filePayload,
+          expenses,
+          paymentDone,
+          err.message || 'Failed to prepare work type / RTO'
         )
       );
       continue;

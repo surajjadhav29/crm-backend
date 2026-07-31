@@ -55,6 +55,7 @@ const EXPENSE_FIELDS = [
   'duplicatePermit',
   'newPermit',
   'pTax',
+  'urgent',
   'setDeal',
 ];
 

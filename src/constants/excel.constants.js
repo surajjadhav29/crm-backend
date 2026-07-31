@@ -30,6 +30,7 @@ const EXCEL_COLUMNS = [
   { header: 'Duplicate Permit', key: 'duplicatePermit', required: false, width: 16, isExpense: true },
   { header: 'New Permit', key: 'newPermit', required: false, width: 12, isExpense: true },
   { header: 'P-tax', key: 'pTax', required: false, width: 10, isExpense: true },
+  { header: 'Urgent', key: 'urgent', required: false, width: 12, isExpense: true },
   { header: 'Set Deal Amount', key: 'setDeal', required: false, width: 14, isExpense: true },
   { header: 'Payment Done', key: 'paymentDone', required: false, width: 14 },
 ];

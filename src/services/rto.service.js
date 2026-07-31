@@ -30,4 +30,41 @@ async function createRto(user, name) {
   return rto.toJSON();
 }
 
-module.exports = { listRtos, createRto };
+/**
+ * Ensure RTO is available for filters/dropdowns (Excel bulk).
+ * Built-in MH* codes need no DB row. Custom names are created once.
+ */
+async function ensureRto(user, name) {
+  if (!name || !String(name).trim()) {
+    throw ApiError.badRequest('RTO name is required');
+  }
+
+  const key = rtoKey(name);
+  if (!key) {
+    throw ApiError.badRequest('RTO name is required');
+  }
+
+  // Built-in list already covers this code — nothing to insert.
+  if (BASE_RTO_KEYS.has(key)) {
+    return { name: cleanName(name), key, builtin: true };
+  }
+
+  const existing = await Rto.findOne({ key });
+  if (existing) return existing.toJSON();
+
+  try {
+    return await createRto(user, name);
+  } catch (err) {
+    if (err.statusCode === 409) {
+      const again = await Rto.findOne({ key });
+      if (again) return again.toJSON();
+      // Conflict because it matches a base key that appeared mid-flight.
+      if (BASE_RTO_KEYS.has(key)) {
+        return { name: cleanName(name), key, builtin: true };
+      }
+    }
+    throw err;
+  }
+}
+
+module.exports = { listRtos, createRto, ensureRto };
