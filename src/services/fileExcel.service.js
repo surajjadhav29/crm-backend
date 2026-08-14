@@ -130,6 +130,8 @@ async function buildExcelTemplateBuffer() {
       newPermit: 0,
       pTax: 0,
       urgent: 0,
+      cngAdjustment: 0,
+      mobNoUpdate: 0,
       setDeal: 2500,
       paymentDone: 'No',
     });
@@ -164,6 +166,8 @@ async function buildExcelTemplateBuffer() {
       'newPermit',
       'pTax',
       'urgent',
+      'cngAdjustment',
+      'mobNoUpdate',
       'setDeal',
     ].forEach((key) => {
       sheet.getColumn(key).numFmt = '#,##0.00';
@@ -187,7 +191,7 @@ async function buildExcelTemplateBuffer() {
       'Documents: comma-separated (or semicolon), e.g. RC, Form 29, Old aadhar. Use exact names from the "Documents" sheet.',
     ]);
     notes.addRow([
-      'Prices: Challan / Adjustment / PUC / HSRP / Insurance / Road Tax / Permit Cancel / Duplicate Permit / New Permit / P-tax / Urgent / Set Deal — empty → 0. Payment Done empty → No',
+      'Prices: Challan / Adjustment / PUC / HSRP / Insurance / Road Tax / Permit Cancel / Duplicate Permit / New Permit / P-tax / Urgent / CNG Adjustment / Mob No. Update / Set Deal — empty → 0. Payment Done empty → No',
     ]);
     notes.addRow([
       'Work Type: if the name is new, it is auto-created. Documents column (comma-separated) becomes that work type checklist — catalog names only (see Documents sheet). No new document types.',
@@ -297,8 +301,8 @@ function rowToPayload(row, columnMap) {
     workType: normalizeWorkTypeName(cellText(raw.workType)),
     vehicleNo: normalizeVehicleNo(raw.vehicleNo),
     vehicleModel: upper(raw.vehicleModel),
-    chassisNo: upper(raw.chassisNo),
-    engineNo: upper(raw.engineNo),
+    chassisNo: upper(String(raw.chassisNo || '').replace(/\s+/g, '')),
+    engineNo: upper(String(raw.engineNo || '').replace(/\s+/g, '')),
     oldOwnerName: upper(raw.oldOwnerName),
     ownerName: upper(raw.ownerName),
     oldOwnerMob: excelMobile(raw.oldOwnerMob),
@@ -322,6 +326,8 @@ function rowToPayload(row, columnMap) {
     newPermit: excelAmount(raw.newPermit),
     pTax: excelAmount(raw.pTax),
     urgent: excelAmount(raw.urgent),
+    cngAdjustment: excelAmount(raw.cngAdjustment),
+    mobNoUpdate: excelAmount(raw.mobNoUpdate),
     setDeal: excelAmount(raw.setDeal),
   };
   // Empty / missing Payment Done → No (false)
@@ -402,6 +408,8 @@ function buildFailedRow(rowNumber, filePayload, expenses, paymentDone, error) {
       newPermit: expenses?.newPermit ?? 0,
       pTax: expenses?.pTax ?? 0,
       urgent: expenses?.urgent ?? 0,
+      cngAdjustment: expenses?.cngAdjustment ?? 0,
+      mobNoUpdate: expenses?.mobNoUpdate ?? 0,
       setDeal: expenses?.setDeal ?? 0,
       paymentDone: paymentDone ? 'Yes' : 'No',
     },
@@ -485,7 +493,7 @@ async function importFilesFromExcel(user, buffer) {
       parsed = rowToPayload(row, columnMap);
     } catch (err) {
       errors.push(
-        buildFailedRow(rowNumber, {}, { challan: 0, adjustment: 0, puc: 0, hsrp: 0, insurance: 0, roadTax: 0, permitCancel: 0, duplicatePermit: 0, newPermit: 0, pTax: 0, urgent: 0, setDeal: 0 }, false, err.message || 'Failed to read row')
+        buildFailedRow(rowNumber, {}, { challan: 0, adjustment: 0, puc: 0, hsrp: 0, insurance: 0, roadTax: 0, permitCancel: 0, duplicatePermit: 0, newPermit: 0, pTax: 0, urgent: 0, cngAdjustment: 0, mobNoUpdate: 0, setDeal: 0 }, false, err.message || 'Failed to read row')
       );
       continue;
     }

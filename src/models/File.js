@@ -13,6 +13,8 @@ const expensesSchema = new mongoose.Schema(
     newPermit: { type: Number, default: 0 },
     pTax: { type: Number, default: 0 },
     urgent: { type: Number, default: 0 },
+    cngAdjustment: { type: Number, default: 0 },
+    mobNoUpdate: { type: Number, default: 0 },
     setDeal: { type: Number, default: 0 },
   },
   { _id: false }

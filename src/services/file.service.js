@@ -158,15 +158,26 @@ function normalizeVehicleNo(value) {
 
 const MOBILE_RE = /^\d{10}$/;
 
+// Chassis / engine: letters, digits, and special characters; no spaces; exactly 5.
+function normalizeChassisEngine(value) {
+  return String(value || '').replace(/\s+/g, '').toUpperCase();
+}
+
 // Server-side format validation so direct API calls can't bypass the UI rules.
 // Only fields present in `payload` are checked (safe for partial updates).
 function assertValidFileFields(payload) {
   const has = (field) => payload[field] !== undefined && payload[field] !== null;
 
   for (const field of ['chassisNo', 'engineNo']) {
-    if (has(field) && String(payload[field]).trim().length !== 5) {
-      const label = field === 'chassisNo' ? 'Chassis' : 'Engine';
-      throw ApiError.badRequest(`${label} number must be exactly 5 characters`);
+    if (has(field)) {
+      const normalized = normalizeChassisEngine(payload[field]);
+      payload[field] = normalized;
+      if (normalized.length !== 5) {
+        const label = field === 'chassisNo' ? 'Chassis' : 'Engine';
+        throw ApiError.badRequest(
+          `${label} number must be exactly 5 characters (letters, digits, or special characters)`
+        );
+      }
     }
   }
 
@@ -498,6 +509,24 @@ async function resolveAssignee(actingUser, targetId) {
   return targetUser._id;
 }
 
+function getMissingRequiredDocuments(file) {
+  const required = Array.isArray(file.requiredDocuments) ? file.requiredDocuments : [];
+  if (!required.length) return [];
+  const received = new Set(
+    (Array.isArray(file.documents) ? file.documents : []).map((d) =>
+      String(d || '')
+        .trim()
+        .toLowerCase()
+    )
+  );
+  return required.filter((doc) => {
+    const key = String(doc || '')
+      .trim()
+      .toLowerCase();
+    return key && !received.has(key);
+  });
+}
+
 async function updateStatus(user, id, { status, remarks } = {}) {
   if (!FILE_STATUSES.includes(status)) {
     throw ApiError.badRequest('Invalid status');
@@ -507,27 +536,28 @@ async function updateStatus(user, id, { status, remarks } = {}) {
   }
 
   const file = await getAccessibleFile(id, user);
+  const missingDocs = getMissingRequiredDocuments(file);
 
-  // Pending files must have all required documents before any status change.
-  if (file.status === 'pending' && status !== 'pending') {
-    const required = Array.isArray(file.requiredDocuments) ? file.requiredDocuments : [];
-    if (required.length) {
-      const received = new Set(
-        (Array.isArray(file.documents) ? file.documents : []).map((d) =>
-          String(d || '')
-            .trim()
-            .toLowerCase()
-        )
-      );
-      const missing = required.filter((doc) => {
-        const key = String(doc || '')
-          .trim()
-          .toLowerCase();
-        return key && !received.has(key);
-      });
-      if (missing.length) {
-        throw ApiError.badRequest('DOC IS REQUIRED', 'DOCUMENTS_REQUIRED');
-      }
+  // Hold / Paper Return → only In Process allowed.
+  if (
+    (file.status === 'on_hold' || file.status === 'paper_return') &&
+    status !== file.status &&
+    status !== 'in_progress'
+  ) {
+    throw ApiError.badRequest(
+      'From Hold or Paper Return you can only move the file to In Process',
+      'STATUS_TRANSITION_BLOCKED'
+    );
+  }
+
+  // Missing required docs: never allow Done; from Pending only Hold / Paper Return.
+  if (missingDocs.length && status !== file.status) {
+    if (status === 'completed' || status === 'done') {
+      throw ApiError.badRequest('DOC IS REQUIRED', 'DOCUMENTS_REQUIRED');
+    }
+    const docsNotRequiredForStatus = status === 'on_hold' || status === 'paper_return';
+    if (file.status === 'pending' && !docsNotRequiredForStatus) {
+      throw ApiError.badRequest('DOC IS REQUIRED', 'DOCUMENTS_REQUIRED');
     }
   }
 
@@ -558,10 +588,17 @@ async function updateStatus(user, id, { status, remarks } = {}) {
     });
   }
   if (previousStatus !== status) {
+    let note = '';
+    if (status === 'objection' && remarks) {
+      note = String(remarks).trim();
+    } else if (status === 'completed' || status === 'done') {
+      // Show RTO under Done in Status Log (same place as "File created").
+      note = String(file.rtoName || '').trim();
+    }
     file.statusHistory.push({
       status,
       at: new Date(),
-      note: status === 'objection' && remarks ? String(remarks).trim() : '',
+      note,
     });
   }
 
@@ -577,7 +614,10 @@ async function updateExpenses(user, id, body) {
   if (user.role !== 'superadmin') {
     expenses.setDeal = Number(file.expenses?.setDeal) || 0;
   }
-  file.expenses = expenses;
+
+  // Persist every expense line (incl. cngAdjustment / mobNoUpdate) into MongoDB.
+  file.set('expenses', expenses);
+  file.markModified('expenses');
   file.totalBill = sumExpenses(expenses);
   file.paymentDone = Boolean(body.paymentDone);
 

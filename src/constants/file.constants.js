@@ -56,6 +56,8 @@ const EXPENSE_FIELDS = [
   'newPermit',
   'pTax',
   'urgent',
+  'cngAdjustment',
+  'mobNoUpdate',
   'setDeal',
 ];
 
