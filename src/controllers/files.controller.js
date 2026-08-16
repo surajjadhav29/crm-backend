@@ -10,6 +10,8 @@ async function list(req, res) {
     rtoName: req.query.rtoName,
     workType: req.query.workType,
     dealerName: req.query.dealerName,
+    date: req.query.date,
+    datePreset: req.query.datePreset,
   });
   return res.status(200).json(result);
 }
@@ -29,6 +31,8 @@ async function paginatedList(req, res) {
     rtoName: req.query.rtoName,
     workType: req.query.workType,
     dealerName: req.query.dealerName,
+    date: req.query.date,
+    datePreset: req.query.datePreset,
   });
   return res.status(200).json(result);
 }
@@ -64,6 +68,15 @@ async function updateExpenses(req, res) {
 async function remove(req, res) {
   await fileService.deleteFile(req.user, req.params.id);
   return res.status(200).json({ success: true });
+}
+
+async function bulk(req, res) {
+  const result = await fileService.bulkFiles(req.user, {
+    ids: req.body.ids,
+    action: req.body.action,
+    payload: req.body.payload,
+  });
+  return res.status(200).json({ success: true, ...result });
 }
 
 async function downloadExcelTemplate(_req, res) {
@@ -107,6 +120,7 @@ module.exports = {
   updateStatus,
   updateExpenses,
   remove,
+  bulk,
   downloadExcelTemplate,
   uploadExcel,
 };

@@ -17,7 +17,7 @@ const {
   FILE_NUMBER_COUNTER_ID,
 } = require('../constants/file.constants');
 const { normalizeDocuments, normalizeWorkTypeName } = require('../constants/workType.constants');
-const { todayDateString, dateStringDaysAgo } = require('../utils/date');
+const { todayDateString, dateStringDaysAgo, buildDateFilterQuery, matchesDateFilter } = require('../utils/date');
 
 /* ------------------------------------------------------------------ */
 /* Pure domain helpers (no I/O) — reusable across services            */
@@ -100,16 +100,19 @@ function buildSearchQuery(search) {
 
 function buildListQuery(
   user,
-  { type = 'all_records', search = '', filterUserId, rtoName, workType, dealerName } = {}
+  { type = 'all_records', search = '', filterUserId, rtoName, workType, dealerName, date, datePreset } = {}
 ) {
   const parts = [buildScopeQuery(user, filterUserId)];
 
   const view = buildViewQuery(type);
   if (Object.keys(view).length) parts.push(view);
 
-  if (rtoName) parts.push({ rtoName });
-  if (workType) parts.push({ workType });
-  if (dealerName) parts.push({ dealerName });
+  if (rtoName) parts.push({ rtoName: exactInsensitive(rtoName) });
+  if (workType) parts.push({ workType: exactInsensitive(workType) });
+  if (dealerName) parts.push({ dealerName: exactInsensitive(dealerName) });
+
+  const dateQuery = buildDateFilterQuery({ date, datePreset });
+  if (dateQuery) parts.push(dateQuery);
 
   const searchQuery = buildSearchQuery(search);
   if (searchQuery) parts.push(searchQuery);
@@ -120,11 +123,11 @@ function buildListQuery(
 
 // Column filters (exact match). Empty/undefined values are ignored so callers
 // can pass a partial filter object safely.
-function matchesFilters(file, { rtoName, workType, dealerName } = {}) {
+function matchesFilters(file, { rtoName, workType, dealerName, date, datePreset } = {}) {
   if (rtoName && file.rtoName !== rtoName) return false;
   if (workType && file.workType !== workType) return false;
   if (dealerName && file.dealerName !== dealerName) return false;
-  return true;
+  return matchesDateFilter(file, { date, datePreset });
 }
 
 function matchesSearch(file, search) {
@@ -356,7 +359,7 @@ function computeDashboardStats(files) {
 
 async function listFiles(
   user,
-  { type = 'all', search = '', filterUserId, rtoName, workType, dealerName } = {}
+  { type = 'all_records', search = '', filterUserId, rtoName, workType, dealerName, date, datePreset } = {}
 ) {
   const query = buildListQuery(user, {
     type,
@@ -365,6 +368,8 @@ async function listFiles(
     rtoName,
     workType,
     dealerName,
+    date,
+    datePreset,
   });
   const files = await File.find(query).sort({ createdAt: -1 });
   return { files: files.map((f) => toPublicFile(f, user)), total: files.length };
@@ -381,6 +386,8 @@ async function paginateFiles(
     rtoName,
     workType,
     dealerName,
+    date,
+    datePreset,
   } = {}
 ) {
   const safePage = Math.max(1, parseInt(page, 10) || 1);
@@ -392,6 +399,8 @@ async function paginateFiles(
     rtoName,
     workType,
     dealerName,
+    date,
+    datePreset,
   });
 
   const [totalCount, rows] = await Promise.all([
@@ -630,9 +639,69 @@ async function deleteFile(user, id) {
   await file.deleteOne();
 }
 
+const BULK_ACTIONS = new Set(['assign', 'status', 'delete']);
+const MAX_BULK_IDS = 100;
+
+async function bulkFiles(user, { ids, action, payload } = {}) {
+  if (!BULK_ACTIONS.has(action)) {
+    throw ApiError.badRequest('Invalid bulk action');
+  }
+
+  const list = Array.isArray(ids)
+    ? [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+  if (!list.length) throw ApiError.badRequest('Select at least one file');
+  if (list.length > MAX_BULK_IDS) {
+    throw ApiError.badRequest(`You can update at most ${MAX_BULK_IDS} files at once`);
+  }
+
+  if (action === 'assign') {
+    if (user.role !== 'superadmin') {
+      throw ApiError.forbidden('Only an admin can reassign files');
+    }
+    await resolveAssignee(user, payload?.userId);
+  }
+
+  if (action === 'status') {
+    if (!FILE_STATUSES.includes(payload?.status)) {
+      throw ApiError.badRequest('Invalid status');
+    }
+    if (payload.status === 'objection' && !String(payload?.remarks || '').trim()) {
+      throw ApiError.badRequest('Description is required for objection status');
+    }
+  }
+
+  const updated = [];
+  const failed = [];
+
+  for (const id of list) {
+    try {
+      if (action === 'assign') {
+        await updateFile(user, id, { createdBy: payload.userId });
+      } else if (action === 'status') {
+        await updateStatus(user, id, {
+          status: payload.status,
+          remarks: payload.remarks,
+        });
+      } else {
+        await deleteFile(user, id);
+      }
+      updated.push(id);
+    } catch (err) {
+      failed.push({
+        id,
+        error: err.message || 'Failed',
+        code: err.errorCode || undefined,
+      });
+    }
+  }
+
+  return { updated: updated.length, failed };
+}
+
 async function getStatsFor(user, filterUserIdOrOpts) {
   // Supports legacy `getStatsFor(user, userIdString)` and
-  // `getStatsFor(user, { filterUserId, rtoName, workType, dealerName, search })`.
+  // `getStatsFor(user, { filterUserId, rtoName, workType, dealerName, search, date })`.
   const opts =
     filterUserIdOrOpts && typeof filterUserIdOrOpts === 'object'
       ? filterUserIdOrOpts
@@ -645,6 +714,8 @@ async function getStatsFor(user, filterUserIdOrOpts) {
     rtoName: opts.rtoName,
     workType: opts.workType,
     dealerName: opts.dealerName,
+    date: opts.date,
+    datePreset: opts.datePreset,
   });
   const cutoff = dateStringDaysAgo(HOLD_DAYS);
 
@@ -707,5 +778,6 @@ module.exports = {
   updateStatus,
   updateExpenses,
   deleteFile,
+  bulkFiles,
   getStatsFor,
 };
