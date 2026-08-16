@@ -84,7 +84,15 @@ async function updateUser(id, { fullName, email, role, password } = {}) {
   }
 
   if (fullName) user.fullName = fullName.trim();
-  if (email) user.email = email.trim().toLowerCase();
+  if (email) {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail !== user.email) {
+      if (await User.findOne({ email: normalizedEmail, _id: { $ne: user._id } })) {
+        throw ApiError.conflict('A user with this email already exists');
+      }
+      user.email = normalizedEmail;
+    }
+  }
   if (role) user.role = role;
   if (password) user.passwordHash = await hashPassword(password);
 

@@ -14,6 +14,7 @@ const {
   updateStatus,
   updateExpenses,
   remove,
+  bulk,
   downloadExcelTemplate,
   uploadExcel,
 } = require('../controllers/files.controller');
@@ -66,6 +67,7 @@ router.post(
   asyncHandler(uploadExcel)
 );
 router.post('/', asyncHandler(create));
+router.post('/bulk', asyncHandler(bulk));
 router.get('/:id', asyncHandler(getOne));
 router.put('/:id', asyncHandler(update));
 router.put('/:id/status', asyncHandler(updateStatus));
