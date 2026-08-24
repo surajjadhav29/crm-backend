@@ -1,8 +1,11 @@
 /** Canonical document checklist options for work types / file intake. */
 const WORK_TYPE_DOCUMENTS = [
   'Affidavit',
+  'Authorization',
   'Bank latter',
   'Bank noc',
+  'Blacklist',
+  'Challan',
   'Chassis print',
   'CNG Latter',
   'commissioner report',
@@ -26,6 +29,7 @@ const WORK_TYPE_DOCUMENTS = [
   'Form F.T',
   'Green tax',
   'GST certificate',
+  'HP continue letter',
   'HSRP',
   'INDEX II',
   'Insurance',
@@ -50,6 +54,7 @@ const WORK_TYPE_DOCUMENTS = [
   'Puc',
   'Ration card',
   'RC',
+  'RC correction',
   'RC particular',
   'register rent agreement',
   'RTO NOC',

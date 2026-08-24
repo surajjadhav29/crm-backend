@@ -19,6 +19,9 @@ const {
 const { normalizeDocuments, normalizeWorkTypeName } = require('../constants/workType.constants');
 const { todayDateString, dateStringDaysAgo, buildDateFilterQuery, matchesDateFilter } = require('../utils/date');
 
+/** Recently status-changed (or created) files first; tie-break by createdAt. */
+const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
+
 /* ------------------------------------------------------------------ */
 /* Pure domain helpers (no I/O) — reusable across services            */
 /* ------------------------------------------------------------------ */
@@ -249,7 +252,7 @@ function buildScopeQuery(user, filterUserId) {
 
 /** @deprecated Prefer buildListQuery — kept for rare callers that need every scoped doc. */
 async function getScopedFiles(user, filterUserId) {
-  return File.find(buildScopeQuery(user, filterUserId)).sort({ createdAt: -1 });
+  return File.find(buildScopeQuery(user, filterUserId)).sort(FILE_LIST_SORT);
 }
 
 async function getAccessibleFile(id, user) {
@@ -371,7 +374,7 @@ async function listFiles(
     date,
     datePreset,
   });
-  const files = await File.find(query).sort({ createdAt: -1 });
+  const files = await File.find(query).sort(FILE_LIST_SORT);
   return { files: files.map((f) => toPublicFile(f, user)), total: files.length };
 }
 
@@ -406,7 +409,7 @@ async function paginateFiles(
   const [totalCount, rows] = await Promise.all([
     File.countDocuments(query),
     File.find(query)
-      .sort({ createdAt: -1 })
+      .sort(FILE_LIST_SORT)
       .skip((safePage - 1) * safeSize)
       .limit(safeSize),
   ]);
@@ -604,9 +607,10 @@ async function updateStatus(user, id, { status, remarks } = {}) {
       // Show RTO under Done in Status Log (same place as "File created").
       note = String(file.rtoName || '').trim();
     }
+    const changedAt = new Date();
     file.statusHistory.push({
       status,
-      at: new Date(),
+      at: changedAt,
       note,
     });
   }

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { resolveLastStatusAt } = require('../utils/fileStatus');
 
 const expensesSchema = new mongoose.Schema(
   {
@@ -62,6 +63,8 @@ const fileSchema = new mongoose.Schema(
     paymentDone: { type: Boolean, default: false },
     expenses: { type: expensesSchema, default: () => ({}) },
     statusHistory: { type: [statusHistorySchema], default: [] },
+    /** Denormalized from latest statusHistory.at — for fast list sort only. */
+    lastStatusAt: { type: Date, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   },
   {
@@ -70,6 +73,9 @@ const fileSchema = new mongoose.Schema(
       transform(_doc, ret) {
         ret.id = ret._id.toString();
         ret.createdBy = ret.createdBy.toString();
+        if (ret.lastStatusAt instanceof Date) {
+          ret.lastStatusAt = ret.lastStatusAt.toISOString();
+        }
         if (Array.isArray(ret.statusHistory)) {
           ret.statusHistory = ret.statusHistory.map((entry) => ({
             status: entry.status,
@@ -86,6 +92,9 @@ const fileSchema = new mongoose.Schema(
 );
 
 fileSchema.index({ createdBy: 1, createdAt: -1 });
+fileSchema.index({ createdBy: 1, lastStatusAt: -1 });
+fileSchema.index({ createdBy: 1, status: 1, lastStatusAt: -1 });
+fileSchema.index({ status: 1, lastStatusAt: -1, createdAt: -1 });
 fileSchema.index({ status: 1, date: 1 });
 fileSchema.index({ createdBy: 1, status: 1 });
 fileSchema.index({ dealerName: 1 });
@@ -93,5 +102,17 @@ fileSchema.index({ workType: 1 });
 fileSchema.index({ rtoName: 1 });
 // Same vehicle + same work type = duplicate; different work type is allowed.
 fileSchema.index({ vehicleNo: 1, workType: 1 }, { unique: true });
+
+// Keep lastStatusAt in sync whenever statusHistory changes (history = source of truth).
+fileSchema.pre('save', function syncLastStatusAtFromHistory(next) {
+  if (this.isModified('statusHistory')) {
+    const resolved = resolveLastStatusAt({
+      statusHistory: this.statusHistory,
+      createdAt: this.createdAt,
+    });
+    if (resolved) this.lastStatusAt = resolved;
+  }
+  next();
+});
 
 module.exports = mongoose.model('File', fileSchema);
