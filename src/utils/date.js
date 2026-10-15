@@ -40,8 +40,22 @@ function normalizeDatePreset(value) {
   return DATE_PRESETS.has(key) ? key : '';
 }
 
-/** Mongo query fragment for Created date presets / a custom calendar day. */
-function buildDateFilterQuery({ date, datePreset } = {}) {
+/** Mongo query fragment for Created date presets / a custom calendar range. */
+function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
+  let from = normalizeDateFilter(dateFrom);
+  let to = normalizeDateFilter(dateTo);
+  if (from && to && from > to) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+  if (from || to) {
+    const range = {};
+    if (from) range.$gte = from;
+    if (to) range.$lte = to;
+    return { date: range };
+  }
+
   const preset = normalizeDatePreset(datePreset);
   if (preset === 'hour') {
     return { createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) } };
@@ -59,8 +73,8 @@ function buildDateFilterQuery({ date, datePreset } = {}) {
   return day ? { date: day } : null;
 }
 
-function matchesDateFilter(file, { date, datePreset } = {}) {
-  const query = buildDateFilterQuery({ date, datePreset });
+function matchesDateFilter(file, { date, datePreset, dateFrom, dateTo } = {}) {
+  const query = buildDateFilterQuery({ date, datePreset, dateFrom, dateTo });
   if (!query) return true;
   if (query.createdAt?.$gte) {
     const created = file.createdAt ? new Date(file.createdAt) : null;
@@ -68,7 +82,9 @@ function matchesDateFilter(file, { date, datePreset } = {}) {
   }
   if (query.date && typeof query.date === 'object') {
     const day = String(file.date || '').slice(0, 10);
-    return day >= query.date.$gte && day <= query.date.$lte;
+    if (query.date.$gte && day < query.date.$gte) return false;
+    if (query.date.$lte && day > query.date.$lte) return false;
+    return Boolean(day);
   }
   if (query.date) {
     return String(file.date || '').slice(0, 10) === query.date;

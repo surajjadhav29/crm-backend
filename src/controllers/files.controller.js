@@ -11,6 +11,8 @@ async function list(req, res) {
     workType: req.query.workType,
     dealerName: req.query.dealerName,
     date: req.query.date,
+    dateFrom: req.query.dateFrom,
+    dateTo: req.query.dateTo,
     datePreset: req.query.datePreset,
   });
   return res.status(200).json(result);
@@ -32,6 +34,8 @@ async function paginatedList(req, res) {
     workType: req.query.workType,
     dealerName: req.query.dealerName,
     date: req.query.date,
+    dateFrom: req.query.dateFrom,
+    dateTo: req.query.dateTo,
     datePreset: req.query.datePreset,
   });
   return res.status(200).json(result);

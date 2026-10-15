@@ -8,6 +8,8 @@ async function stats(req, res) {
     dealerName: req.query.dealerName,
     search: req.query.search,
     date: req.query.date,
+    dateFrom: req.query.dateFrom,
+    dateTo: req.query.dateTo,
     datePreset: req.query.datePreset,
   });
   return res.status(200).json(result);

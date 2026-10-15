@@ -8,15 +8,12 @@ async function requireAuth(req, res, next) {
   if (!token) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
-
   try {
     const payload = verifyToken(token);
     const user = await User.findById(payload.sub);
-
     if (!user || !user.isActive) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
-
     req.user = user;
     next();
   } catch {

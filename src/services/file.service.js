@@ -84,37 +84,113 @@ function buildViewQuery(type) {
   }
 }
 
+/**
+ * Files search fields. Client name on the table is ownerName (new owner)
+ * when set, otherwise oldOwnerName — both are searched.
+ */
+const SEARCH_FIELDS = [
+  'fileNumber',
+  'date',
+  'dealerName',
+  'workType',
+  'vehicleNo',
+  'vehicleModel',
+  'chassisNo',
+  'engineNo',
+  'oldOwnerName',
+  'ownerName',
+  'oldOwnerMob',
+  'newOwnerMob',
+  'dealerMob',
+  'rtoName',
+  'remarks',
+  'documents',
+];
+
+function compactSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s\-_/. ,()]+/g, '');
+}
+
+/**
+ * "RK" matches "R K FINANCE", "MH12" matches "MH-12" / "MH12 - PUNE",
+ * "wagonr" matches "WAGON R". Separators in the stored value are optional.
+ */
+function separatorInsensitiveRegex(value) {
+  const chars = [...compactSearchText(value)];
+  if (!chars.length) return null;
+  return new RegExp(chars.map((ch) => escapeRegex(ch)).join('[\\s\\-_/. ,()]*'), 'i');
+}
+
 function buildSearchQuery(search) {
-  if (!search || !String(search).trim()) return null;
-  const re = new RegExp(escapeRegex(String(search).trim()), 'i');
-  return {
-    $or: [
-      { fileNumber: re },
-      { ownerName: re },
-      { oldOwnerName: re },
-      { vehicleNo: re },
-      { vehicleModel: re },
-      { dealerName: re },
-      { workType: re },
-      { rtoName: re },
-    ],
-  };
+  const raw = String(search || '').trim();
+  if (!raw) return null;
+  const re = separatorInsensitiveRegex(raw);
+  if (!re) return null;
+  return { $or: SEARCH_FIELDS.map((field) => ({ [field]: re })) };
+}
+
+/** Query string, comma list, or repeated params → unique trimmed names. */
+function parseFilterList(value) {
+  if (value == null || value === '') return [];
+  const parts = Array.isArray(value) ? value : [value];
+  const out = [];
+  const seen = new Set();
+  for (const part of parts) {
+    for (const item of String(part).split(',')) {
+      const name = item.trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+function fieldInQuery(field, value) {
+  const list = parseFilterList(value);
+  if (!list.length) return null;
+  if (list.length === 1) return { [field]: exactInsensitive(list[0]) };
+  return { $or: list.map((name) => ({ [field]: exactInsensitive(name) })) };
+}
+
+function matchesFilterList(fileValue, filterValue) {
+  const list = parseFilterList(filterValue);
+  if (!list.length) return true;
+  const current = String(fileValue || '').toLowerCase();
+  return list.some((name) => name.toLowerCase() === current);
 }
 
 function buildListQuery(
   user,
-  { type = 'all_records', search = '', filterUserId, rtoName, workType, dealerName, date, datePreset } = {}
+  {
+    type = 'all_records',
+    search = '',
+    filterUserId,
+    rtoName,
+    workType,
+    dealerName,
+    date,
+    dateFrom,
+    dateTo,
+    datePreset,
+  } = {}
 ) {
   const parts = [buildScopeQuery(user, filterUserId)];
 
   const view = buildViewQuery(type);
   if (Object.keys(view).length) parts.push(view);
 
-  if (rtoName) parts.push({ rtoName: exactInsensitive(rtoName) });
+  const rtoQuery = fieldInQuery('rtoName', rtoName);
+  if (rtoQuery) parts.push(rtoQuery);
   if (workType) parts.push({ workType: exactInsensitive(workType) });
-  if (dealerName) parts.push({ dealerName: exactInsensitive(dealerName) });
+  const dealerQuery = fieldInQuery('dealerName', dealerName);
+  if (dealerQuery) parts.push(dealerQuery);
 
-  const dateQuery = buildDateFilterQuery({ date, datePreset });
+  const dateQuery = buildDateFilterQuery({ date, datePreset, dateFrom, dateTo });
   if (dateQuery) parts.push(dateQuery);
 
   const searchQuery = buildSearchQuery(search);
@@ -126,27 +202,21 @@ function buildListQuery(
 
 // Column filters (exact match). Empty/undefined values are ignored so callers
 // can pass a partial filter object safely.
-function matchesFilters(file, { rtoName, workType, dealerName, date, datePreset } = {}) {
-  if (rtoName && file.rtoName !== rtoName) return false;
+function matchesFilters(file, { rtoName, workType, dealerName, date, dateFrom, dateTo, datePreset } = {}) {
+  if (!matchesFilterList(file.rtoName, rtoName)) return false;
   if (workType && file.workType !== workType) return false;
-  if (dealerName && file.dealerName !== dealerName) return false;
-  return matchesDateFilter(file, { date, datePreset });
+  if (!matchesFilterList(file.dealerName, dealerName)) return false;
+  return matchesDateFilter(file, { date, datePreset, dateFrom, dateTo });
 }
 
 function matchesSearch(file, search) {
-  if (!search || !search.trim()) return true;
-  const q = search.toLowerCase();
-  const fields = [
-    file.fileNumber,
-    file.ownerName,
-    file.oldOwnerName,
-    file.vehicleNo,
-    file.vehicleModel,
-    file.dealerName,
-    file.workType,
-    file.rtoName,
-  ];
-  return fields.some((v) => (v || '').toLowerCase().includes(q));
+  const needle = compactSearchText(search);
+  if (!needle) return true;
+  const values = SEARCH_FIELDS.flatMap((field) => {
+    const value = file[field];
+    return Array.isArray(value) ? value : [value];
+  });
+  return values.some((value) => compactSearchText(value).includes(needle));
 }
 
 function requiresNewOwner(workType) {
@@ -362,7 +432,18 @@ function computeDashboardStats(files) {
 
 async function listFiles(
   user,
-  { type = 'all_records', search = '', filterUserId, rtoName, workType, dealerName, date, datePreset } = {}
+  {
+    type = 'all_records',
+    search = '',
+    filterUserId,
+    rtoName,
+    workType,
+    dealerName,
+    date,
+    dateFrom,
+    dateTo,
+    datePreset,
+  } = {}
 ) {
   const query = buildListQuery(user, {
     type,
@@ -372,6 +453,8 @@ async function listFiles(
     workType,
     dealerName,
     date,
+    dateFrom,
+    dateTo,
     datePreset,
   });
   const files = await File.find(query).sort(FILE_LIST_SORT);
@@ -390,6 +473,8 @@ async function paginateFiles(
     workType,
     dealerName,
     date,
+    dateFrom,
+    dateTo,
     datePreset,
   } = {}
 ) {
@@ -403,6 +488,8 @@ async function paginateFiles(
     workType,
     dealerName,
     date,
+    dateFrom,
+    dateTo,
     datePreset,
   });
 
@@ -719,6 +806,8 @@ async function getStatsFor(user, filterUserIdOrOpts) {
     workType: opts.workType,
     dealerName: opts.dealerName,
     date: opts.date,
+    dateFrom: opts.dateFrom,
+    dateTo: opts.dateTo,
     datePreset: opts.datePreset,
   });
   const cutoff = dateStringDaysAgo(HOLD_DAYS);

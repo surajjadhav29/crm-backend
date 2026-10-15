@@ -66,6 +66,8 @@ const WORK_TYPE_DOCUMENTS = [
   'Vehicle chassis photo',
   'Vehicle photo back',
   'Vehicle photo front',
+  'Gazette',
+  'PG Letter',
 ];
 
 const DOCUMENT_SET = new Set(WORK_TYPE_DOCUMENTS.map((d) => d.toLowerCase()));
