@@ -65,9 +65,6 @@ const EXPENSE_FIELDS = [
 // creation, but required before the file can move to "in_progress".
 const NEW_OWNER_WORK_TYPES = ['TO', 'TO+HPT', 'TO+HPT+HPA'];
 
-// A pending file older than this many days is treated as "on hold".
-const HOLD_DAYS = 60;
-
 // File number generation, e.g. AA-100001.
 const FILE_NUMBER_PREFIX = 'AA-';
 const FILE_NUMBER_BASE = 100000;
@@ -79,7 +76,6 @@ module.exports = {
   REQUIRED_CREATE_FIELDS,
   EXPENSE_FIELDS,
   NEW_OWNER_WORK_TYPES,
-  HOLD_DAYS,
   FILE_NUMBER_PREFIX,
   FILE_NUMBER_BASE,
   FILE_NUMBER_COUNTER_ID,

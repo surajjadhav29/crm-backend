@@ -11,13 +11,12 @@ const {
   REQUIRED_CREATE_FIELDS,
   EXPENSE_FIELDS,
   NEW_OWNER_WORK_TYPES,
-  HOLD_DAYS,
   FILE_NUMBER_PREFIX,
   FILE_NUMBER_BASE,
   FILE_NUMBER_COUNTER_ID,
 } = require('../constants/file.constants');
 const { normalizeDocuments, normalizeWorkTypeName } = require('../constants/workType.constants');
-const { todayDateString, dateStringDaysAgo, buildDateFilterQuery, matchesDateFilter } = require('../utils/date');
+const { todayDateString, buildDateFilterQuery, matchesDateFilter } = require('../utils/date');
 
 /** Recently status-changed (or created) files first; tie-break by createdAt. */
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
@@ -26,13 +25,9 @@ const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
 /* Pure domain helpers (no I/O) — reusable across services            */
 /* ------------------------------------------------------------------ */
 
+/** Hold Sheet = files manually marked On Hold only (no auto age rule). */
 function isHoldFile(file) {
-  if (file.status === 'on_hold') return true;
-  if (file.status !== 'pending') return false;
-  const fileDay = String(file.date || '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fileDay)) return false;
-  const cutoff = dateStringDaysAgo(HOLD_DAYS);
-  return fileDay < cutoff;
+  return file.status === 'on_hold';
 }
 
 function matchesView(file, type) {
@@ -62,12 +57,8 @@ function buildViewQuery(type) {
   switch (type) {
     case 'all':
       return { status: { $in: ['pending', 'in_progress'] } };
-    case 'hold': {
-      const cutoff = dateStringDaysAgo(HOLD_DAYS);
-      return {
-        $or: [{ status: 'on_hold' }, { status: 'pending', date: { $lt: cutoff } }],
-      };
-    }
+    case 'hold':
+      return { status: 'on_hold' };
     case 'return_paper':
       return { status: 'paper_return' };
     case 'objection':
@@ -419,7 +410,7 @@ function computeDashboardStats(files) {
     completed: files.filter((f) => ['completed', 'done'].includes(f.status)).length,
     objection: files.filter((f) => f.status === 'objection').length,
     returnPaper: files.filter((f) => f.status === 'paper_return').length,
-    // Hold sheet = manually on hold OR pending for 60+ days.
+    // Hold sheet = manually marked On Hold only.
     holdSheet: files.filter((f) => isHoldFile(f)).length,
     onHold: files.filter((f) => f.status === 'on_hold').length,
     totalBilling: files.reduce((sum, f) => (f.paymentDone ? sum : sum + (f.totalBill || 0)), 0),
@@ -810,16 +801,11 @@ async function getStatsFor(user, filterUserIdOrOpts) {
     dateTo: opts.dateTo,
     datePreset: opts.datePreset,
   });
-  const cutoff = dateStringDaysAgo(HOLD_DAYS);
-
-  const [byStatus, holdPending, billing] = await Promise.all([
+  const [byStatus, billing] = await Promise.all([
     File.aggregate([
       { $match: match },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]),
-    File.countDocuments({
-      $and: [match, { status: 'pending', date: { $lt: cutoff } }],
-    }),
     File.aggregate([
       { $match: { $and: [match, { paymentDone: false }] } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$totalBill', 0] } } } },
@@ -843,7 +829,7 @@ async function getStatsFor(user, filterUserIdOrOpts) {
     completed,
     objection,
     returnPaper,
-    holdSheet: onHold + holdPending,
+    holdSheet: onHold,
     onHold,
     totalBilling: billing[0]?.total || 0,
   };
