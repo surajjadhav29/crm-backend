@@ -1,6 +1,8 @@
 const fileService = require('../services/file.service');
 const fileExcelService = require('../services/fileExcel.service');
+const dealerInvoiceFilesService = require('../services/dealerInvoiceFiles.service');
 const ApiError = require('../utils/apiError');
+const { parseDealerInvoiceFiltersFromQuery } = require('../utils/dealerInvoiceFileFilters');
 
 async function list(req, res) {
   const result = await fileService.listFiles(req.user, {
@@ -21,6 +23,16 @@ async function list(req, res) {
 async function dealerNames(req, res) {
   const dealers = await fileService.listDealerNames(req.user, req.query.userId);
   return res.status(200).json({ dealers });
+}
+
+/** Invoice wizard: one dealer + optional AND filters (RTO, bill, etc.). */
+async function listByDealer(req, res) {
+  const result = await dealerInvoiceFilesService.listFilesForDealerInvoice(
+    req.user,
+    req.params.dealerId,
+    parseDealerInvoiceFiltersFromQuery(req.query)
+  );
+  return res.status(200).json(result);
 }
 
 async function paginatedList(req, res) {
@@ -117,6 +129,7 @@ async function uploadExcel(req, res) {
 module.exports = {
   list,
   dealerNames,
+  listByDealer,
   paginatedList,
   getOne,
   create,
