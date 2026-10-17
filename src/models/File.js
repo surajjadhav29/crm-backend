@@ -65,6 +65,16 @@ const fileSchema = new mongoose.Schema(
     statusHistory: { type: [statusHistorySchema], default: [] },
     /** Denormalized from latest statusHistory.at — for fast list sort only. */
     lastStatusAt: { type: Date, default: null },
+    /**
+     * District field agent (RTO person) — tracking only; they do not log in.
+     * Name/district are denormalized for fast list display.
+     */
+    fieldAgentId: { type: mongoose.Schema.Types.ObjectId, ref: 'FieldAgent', default: null },
+    fieldAgentName: { type: String, default: '' },
+    fieldAgentMobile: { type: String, default: '' },
+    fieldAgentRtoName: { type: String, default: '' },
+    /** @deprecated Use fieldAgentRtoName — kept for legacy rows. */
+    fieldAgentDistrict: { type: String, default: '' },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   },
   {
@@ -73,6 +83,11 @@ const fileSchema = new mongoose.Schema(
       transform(_doc, ret) {
         ret.id = ret._id.toString();
         ret.createdBy = ret.createdBy.toString();
+        if (ret.fieldAgentId) {
+          ret.fieldAgentId = ret.fieldAgentId.toString();
+        } else {
+          ret.fieldAgentId = null;
+        }
         if (ret.lastStatusAt instanceof Date) {
           ret.lastStatusAt = ret.lastStatusAt.toISOString();
         }
@@ -97,6 +112,7 @@ fileSchema.index({ createdBy: 1, status: 1, lastStatusAt: -1 });
 fileSchema.index({ status: 1, lastStatusAt: -1, createdAt: -1 });
 fileSchema.index({ status: 1, date: 1 });
 fileSchema.index({ createdBy: 1, status: 1 });
+fileSchema.index({ fieldAgentId: 1 });
 fileSchema.index({ dealerName: 1 });
 fileSchema.index({ workType: 1 });
 fileSchema.index({ rtoName: 1 });

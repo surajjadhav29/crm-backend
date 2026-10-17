@@ -2,6 +2,7 @@ const File = require('../models/File');
 const Counter = require('../models/Counter');
 const User = require('../models/User');
 const WorkType = require('../models/WorkType');
+const FieldAgent = require('../models/FieldAgent');
 const ApiError = require('../utils/apiError');
 const { escapeRegex, exactInsensitive } = require('../utils/regex');
 const { isValidObjectId, toObjectId } = require('../utils/objectId');
@@ -98,6 +99,8 @@ const SEARCH_FIELDS = [
   'documents',
 ];
 
+const MOBILE_SEARCH_FIELDS = ['oldOwnerMob', 'newOwnerMob', 'dealerMob'];
+
 function compactSearchText(value) {
   return String(value || '')
     .toLowerCase()
@@ -114,12 +117,42 @@ function separatorInsensitiveRegex(value) {
   return new RegExp(chars.map((ch) => escapeRegex(ch)).join('[\\s\\-_/. ,()]*'), 'i');
 }
 
+function digitsOnly(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+/** Phone-style match: same digit order with optional +91 / spaces / dashes between digits. */
+function digitsFlexibleRegex(digits) {
+  if (!digits || digits.length < 4) return null;
+  return new RegExp(digits.split('').map((ch) => escapeRegex(ch)).join('\\D*'));
+}
+
 function buildSearchQuery(search) {
   const raw = String(search || '').trim();
   if (!raw) return null;
+
+  const orClauses = [];
+
   const re = separatorInsensitiveRegex(raw);
-  if (!re) return null;
-  return { $or: SEARCH_FIELDS.map((field) => ({ [field]: re })) };
+  if (re) {
+    for (const field of SEARCH_FIELDS) {
+      orClauses.push({ [field]: re });
+    }
+  }
+
+  const digits = digitsOnly(raw);
+  if (digits.length >= 4) {
+    const mobileDigits = digits.length > 10 ? digits.slice(-10) : digits;
+    const mobileRe = digitsFlexibleRegex(mobileDigits);
+    if (mobileRe) {
+      for (const field of MOBILE_SEARCH_FIELDS) {
+        orClauses.push({ [field]: mobileRe });
+      }
+    }
+  }
+
+  if (!orClauses.length) return null;
+  return { $or: orClauses };
 }
 
 /** Query string, comma list, or repeated params → unique trimmed names. */
@@ -535,7 +568,7 @@ async function createFile(user, body) {
   await assertFileUnique(payload.vehicleNo, payload.workType);
 
   const createdAt = new Date();
-  const file = await File.create({
+  const file = new File({
     ...payload,
     fileNumber: await nextFileNumber(),
     date: todayDateString(),
@@ -545,6 +578,11 @@ async function createFile(user, body) {
     createdBy: user._id,
   });
 
+  if (body.fieldAgentId !== undefined) {
+    await applyFieldAgentAssignment(file, body.fieldAgentId);
+  }
+
+  await file.save();
   return toPublicFile(file, user);
 }
 
@@ -581,6 +619,11 @@ async function updateFile(user, id, body) {
     file.createdBy = await resolveAssignee(user, body.createdBy);
   }
 
+  // Tracking-only: which district RTO person is handling this file.
+  if (body.fieldAgentId !== undefined) {
+    await applyFieldAgentAssignment(file, body.fieldAgentId);
+  }
+
   await file.save();
   return toPublicFile(file, user);
 }
@@ -597,6 +640,36 @@ async function resolveAssignee(actingUser, targetId) {
     throw ApiError.badRequest('Assigned user not found or inactive');
   }
   return targetUser._id;
+}
+
+/**
+ * Set / clear district field agent on a file (tracking label only).
+ * Pass null or '' to clear.
+ */
+async function applyFieldAgentAssignment(file, fieldAgentId) {
+  if (fieldAgentId === null || fieldAgentId === '' || fieldAgentId === undefined) {
+    file.fieldAgentId = null;
+    file.fieldAgentName = '';
+    file.fieldAgentMobile = '';
+    file.fieldAgentRtoName = '';
+    file.fieldAgentDistrict = '';
+    return;
+  }
+
+  if (!isValidObjectId(fieldAgentId)) {
+    throw ApiError.badRequest('Invalid field agent');
+  }
+
+  const agent = await FieldAgent.findById(fieldAgentId);
+  if (!agent || !agent.isActive) {
+    throw ApiError.badRequest('Field agent not found or inactive');
+  }
+
+  file.fieldAgentId = agent._id;
+  file.fieldAgentName = agent.name;
+  file.fieldAgentMobile = agent.mobile || '';
+  file.fieldAgentRtoName = agent.rtoName || agent.district || '';
+  file.fieldAgentDistrict = '';
 }
 
 function getMissingRequiredDocuments(file) {
