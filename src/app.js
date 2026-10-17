@@ -15,6 +15,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const workTypesRoutes = require('./routes/workTypes.routes');
 const fieldAgentsRoutes = require('./routes/fieldAgents.routes');
 const rtosRoutes = require('./routes/rtos.routes');
+const dealersRoutes = require('./routes/dealers.routes');
 
 const app = express();
 
@@ -42,6 +43,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/work-types', workTypesRoutes);
 app.use('/api/field-agents', fieldAgentsRoutes);
 app.use('/api/rtos', rtosRoutes);
+app.use('/api/dealers', dealersRoutes);
 
 app.use(errorHandler);
 

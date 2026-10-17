@@ -44,6 +44,7 @@ const fileSchema = new mongoose.Schema(
       default: 'pending',
     },
     dealerName: { type: String, required: true },
+    dealerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Dealer', default: null },
     workType: { type: String, required: true },
     // Uniqueness is (vehicleNo + workType) — same vehicle can have multiple work types.
     vehicleNo: { type: String, required: true, uppercase: true, trim: true },
@@ -88,6 +89,7 @@ const fileSchema = new mongoose.Schema(
         } else {
           ret.fieldAgentId = null;
         }
+        if (ret.dealerId) ret.dealerId = ret.dealerId.toString();
         if (ret.lastStatusAt instanceof Date) {
           ret.lastStatusAt = ret.lastStatusAt.toISOString();
         }
@@ -114,6 +116,7 @@ fileSchema.index({ status: 1, date: 1 });
 fileSchema.index({ createdBy: 1, status: 1 });
 fileSchema.index({ fieldAgentId: 1 });
 fileSchema.index({ dealerName: 1 });
+fileSchema.index({ dealerId: 1 });
 fileSchema.index({ workType: 1 });
 fileSchema.index({ rtoName: 1 });
 // Same vehicle + same work type = duplicate; different work type is allowed.

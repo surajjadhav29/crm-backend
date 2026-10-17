@@ -3,6 +3,7 @@ const Counter = require('../models/Counter');
 const User = require('../models/User');
 const WorkType = require('../models/WorkType');
 const FieldAgent = require('../models/FieldAgent');
+const Dealer = require('../models/Dealer');
 const ApiError = require('../utils/apiError');
 const { escapeRegex, exactInsensitive } = require('../utils/regex');
 const { isValidObjectId, toObjectId } = require('../utils/objectId');
@@ -384,6 +385,35 @@ async function assertFileUnique(vehicleNo, workType, excludeId) {
   }
 }
 
+// Store dealer id with the name. A new id copies the dealer name onto the file.
+// The same id leaves the name already saved on the file unchanged.
+async function attachDealer(payload, currentDealerId) {
+  if (payload.dealerId) {
+    if (!isValidObjectId(payload.dealerId)) {
+      throw ApiError.badRequest('Invalid dealer id');
+    }
+    const dealer = await Dealer.findById(payload.dealerId);
+    if (!dealer) {
+      throw ApiError.notFound('Dealer not found');
+    }
+
+    const nextId = dealer._id.toString();
+    const currentId = currentDealerId ? String(currentDealerId) : '';
+    payload.dealerId = dealer._id;
+    if (currentId !== nextId) {
+      payload.dealerName = dealer.name;
+    } else {
+      delete payload.dealerName;
+    }
+    return;
+  }
+
+  if (!payload.dealerName) return;
+
+  const dealer = await Dealer.findOne({ name: exactInsensitive(String(payload.dealerName).trim()) });
+  if (dealer) payload.dealerId = dealer._id;
+}
+
 function pickEditableFields(body) {
   const payload = {};
   for (const field of EDITABLE_FIELDS) {
@@ -546,6 +576,7 @@ async function getFile(user, id) {
 
 async function createFile(user, body) {
   const payload = pickEditableFields(body);
+  await attachDealer(payload, null);
 
   const missing = REQUIRED_CREATE_FIELDS.filter((field) => !payload[field]);
   if (missing.length) {
@@ -590,6 +621,7 @@ async function updateFile(user, id, body) {
   const file = await getAccessibleFile(id, user);
 
   const payload = pickEditableFields(body);
+  await attachDealer(payload, file.dealerId);
   assertValidFileFields(payload);
 
   if (payload.workType !== undefined) {
@@ -925,6 +957,9 @@ module.exports = {
   paginateFiles,
   listDealerNames,
   getFile,
+  buildScopeQuery,
+  toPublicFile,
+  matchesSearch,
   createFile,
   updateFile,
   updateStatus,

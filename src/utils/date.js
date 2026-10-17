@@ -40,8 +40,7 @@ function normalizeDatePreset(value) {
   return DATE_PRESETS.has(key) ? key : '';
 }
 
-/** Mongo query fragment for Created date presets / a custom calendar range. */
-function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
+function buildDateRangeClause(dateFrom, dateTo) {
   let from = normalizeDateFilter(dateFrom);
   let to = normalizeDateFilter(dateTo);
   if (from && to && from > to) {
@@ -49,12 +48,17 @@ function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
     from = to;
     to = swap;
   }
-  if (from || to) {
-    const range = {};
-    if (from) range.$gte = from;
-    if (to) range.$lte = to;
-    return { date: range };
-  }
+  if (!from && !to) return null;
+  const range = {};
+  if (from) range.$gte = from;
+  if (to) range.$lte = to;
+  return { date: range };
+}
+
+/** Mongo query fragment for Created date presets / a custom calendar range. */
+function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
+  const rangeQuery = buildDateRangeClause(dateFrom, dateTo);
+  if (rangeQuery) return rangeQuery;
 
   const preset = normalizeDatePreset(datePreset);
   if (preset === 'hour') {
@@ -71,6 +75,11 @@ function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
   }
   const day = normalizeDateFilter(date);
   return day ? { date: day } : null;
+}
+
+/** Custom created-date range (file.date YYYY-MM-DD) — used by dealer invoice filters. */
+function buildDateRangeFilterQuery({ dateFrom, dateTo } = {}) {
+  return buildDateRangeClause(dateFrom, dateTo);
 }
 
 function matchesDateFilter(file, { date, datePreset, dateFrom, dateTo } = {}) {
@@ -99,5 +108,6 @@ module.exports = {
   normalizeDateFilter,
   normalizeDatePreset,
   buildDateFilterQuery,
+  buildDateRangeFilterQuery,
   matchesDateFilter,
 };
