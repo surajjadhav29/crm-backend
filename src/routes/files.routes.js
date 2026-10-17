@@ -8,6 +8,7 @@ const {
   list,
   paginatedList,
   dealerNames,
+  listByDealer,
   getOne,
   create,
   update,

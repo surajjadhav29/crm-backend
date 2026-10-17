@@ -1,0 +1,39 @@
+const dealerService = require('../services/dealer.service');
+const dealerInvoiceFilesService = require('../services/dealerInvoiceFiles.service');
+const { parseDealerInvoiceFiltersFromQuery } = require('../utils/dealerInvoiceFileFilters');
+
+async function list(_req, res) {
+  const dealers = await dealerService.listDealers();
+  return res.status(200).json({ dealers });
+}
+
+async function names(_req, res) {
+  const dealers = await dealerService.listDealerNames();
+  return res.status(200).json({ dealers });
+}
+
+async function getOne(req, res) {
+  const dealer = await dealerService.getDealer(req.params.id);
+  return res.status(200).json({ dealer });
+}
+
+async function listDealerFiles(req, res) {
+  const result = await dealerInvoiceFilesService.listFilesForDealerInvoice(
+    req.user,
+    req.params.id,
+    parseDealerInvoiceFiltersFromQuery(req.query)
+  );
+  return res.status(200).json(result);
+}
+
+async function create(req, res) {
+  const dealer = await dealerService.createDealer(req.user, req.body);
+  return res.status(201).json({ dealer });
+}
+
+async function update(req, res) {
+  const dealer = await dealerService.updateDealer(req.params.id, req.body);
+  return res.status(200).json({ dealer });
+}
+
+module.exports = { list, names, getOne, listDealerFiles, create, update };

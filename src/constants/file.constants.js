@@ -13,6 +13,7 @@ const FILE_STATUSES = [
 
 // Fields a client is allowed to set/change on a file (mass-assignment guard).
 const EDITABLE_FIELDS = [
+  'dealerId',
   'dealerName',
   'workType',
   'vehicleNo',
