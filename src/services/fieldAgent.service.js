@@ -3,6 +3,7 @@ const File = require('../models/File');
 const ApiError = require('../utils/apiError');
 const { isValidObjectId } = require('../utils/objectId');
 const { exactInsensitive } = require('../utils/regex');
+const { rtoMatchKey, fieldAgentRtoLabel: agentRtoLabel } = require('../utils/rtoMatch');
 
 const MOBILE_RE = /^\d{10}$/;
 
@@ -23,8 +24,23 @@ function normalizeMobile(value) {
 }
 
 function displayRto(agent) {
-  if (!agent) return '';
-  return String(agent.rtoName || agent.district || '').trim();
+  return agentRtoLabel(agent);
+}
+
+async function findAgentOccupyingRto(rtoName, { excludeId } = {}) {
+  const targetKey = rtoMatchKey(rtoName);
+  if (!targetKey) return null;
+  const query = excludeId ? { _id: { $ne: excludeId } } : {};
+  const agents = await FieldAgent.find(query);
+  return agents.find((a) => rtoMatchKey(displayRto(a)) === targetKey) || null;
+}
+
+/** Active field agent for an RTO code (first name A→Z). At most one per RTO in registry. */
+async function pickActiveFieldAgentForRto(rtoName) {
+  const targetKey = rtoMatchKey(rtoName);
+  if (!targetKey) return null;
+  const agents = await FieldAgent.find({ isActive: true }).sort({ name: 1, rtoName: 1 });
+  return agents.find((a) => rtoMatchKey(displayRto(a)) === targetKey) || null;
 }
 
 async function findDuplicate({ name, rtoName, excludeId }) {
@@ -71,6 +87,14 @@ async function createFieldAgent(user, { name, mobile, rtoName } = {}) {
     throw ApiError.conflict('This agent already exists for that RTO');
   }
 
+  const rtoTaken = await findAgentOccupyingRto(normalizedRto);
+  if (rtoTaken) {
+    throw ApiError.conflict(
+      `This RTO already has a field agent (${rtoTaken.name}). Edit or remove them first.`,
+      'FIELD_AGENT_RTO_TAKEN'
+    );
+  }
+
   const agent = await FieldAgent.create({
     name: normalizedName,
     mobile: normalizedMobile,
@@ -91,10 +115,6 @@ async function updateFieldAgent(id, { name, mobile, rtoName, isActive } = {}) {
   if (!agent) {
     throw ApiError.notFound('Field agent not found');
   }
-
-  const previousName = agent.name;
-  const previousMobile = agent.mobile;
-  const previousRto = displayRto(agent);
 
   if (name !== undefined) {
     const normalizedName = normalizeLabel(name);
@@ -132,26 +152,19 @@ async function updateFieldAgent(id, { name, mobile, rtoName, isActive } = {}) {
     throw ApiError.conflict('This agent already exists for that RTO');
   }
 
-  await agent.save();
-
-  const currentRto = displayRto(agent);
-  const changed =
-    agent.name !== previousName ||
-    agent.mobile !== previousMobile ||
-    currentRto !== previousRto;
-  if (changed) {
-    await File.updateMany(
-      { fieldAgentId: agent._id },
-      {
-        $set: {
-          fieldAgentName: agent.name,
-          fieldAgentMobile: agent.mobile,
-          fieldAgentRtoName: agent.rtoName || currentRto,
-          fieldAgentDistrict: '',
-        },
-      }
+  const rtoTaken = await findAgentOccupyingRto(rtoForUnique, { excludeId: agent._id });
+  if (rtoTaken) {
+    throw ApiError.conflict(
+      `This RTO already has a field agent (${rtoTaken.name}). Edit or remove them first.`,
+      'FIELD_AGENT_RTO_TAKEN'
     );
   }
+
+  await agent.save();
+
+  // Do not rewrite fieldAgentName/mobile on existing files — each file keeps the
+  // label snapshot from when it was created or last RTO-mapped. New files pick up
+  // the current registry name via file.service resolveFieldAgentOnFile.
 
   return agent.toJSON();
 }
@@ -189,7 +202,10 @@ module.exports = {
   createFieldAgent,
   updateFieldAgent,
   deleteFieldAgent,
+  pickActiveFieldAgentForRto,
+  findAgentOccupyingRto,
   normalizeLabel,
   normalizeMobile,
   normalizeRtoName,
+  rtoMatchKey,
 };

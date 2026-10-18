@@ -5,7 +5,7 @@
 const File = require('../models/File');
 const Dealer = require('../models/Dealer');
 const ApiError = require('../utils/apiError');
-const { exactInsensitive, escapeRegex } = require('../utils/regex');
+const { exactInsensitive } = require('../utils/regex');
 const { isValidObjectId } = require('../utils/objectId');
 const {
   buildDateFilterQuery,
@@ -13,26 +13,14 @@ const {
   matchesDateFilter,
 } = require('../utils/date');
 const { normalizeDealerInvoiceFilters } = require('../utils/dealerInvoiceFileFilters');
-const { buildScopeQuery, toPublicFile, matchesSearch } = require('./file.service');
+const {
+  buildScopeQuery,
+  toPublicFile,
+  matchesSearch,
+  buildSearchQuery,
+} = require('./file.service');
 
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
-
-function buildSearchQuery(search) {
-  if (!search || !String(search).trim()) return null;
-  const re = new RegExp(escapeRegex(String(search).trim()), 'i');
-  return {
-    $or: [
-      { fileNumber: re },
-      { ownerName: re },
-      { oldOwnerName: re },
-      { vehicleNo: re },
-      { vehicleModel: re },
-      { dealerName: re },
-      { workType: re },
-      { rtoName: re },
-    ],
-  };
-}
 
 function appendRtoNameFilter(parts, rtoName) {
   if (!rtoName) return;

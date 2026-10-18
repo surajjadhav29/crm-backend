@@ -19,6 +19,8 @@ const {
 } = require('../constants/file.constants');
 const { normalizeDocuments, normalizeWorkTypeName } = require('../constants/workType.constants');
 const { todayDateString, buildDateFilterQuery, matchesDateFilter } = require('../utils/date');
+const { rtoMatchKey } = require('../utils/rtoMatch');
+const { pickActiveFieldAgentForRto } = require('./fieldAgent.service');
 
 /** Recently status-changed (or created) files first; tie-break by createdAt. */
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
@@ -609,9 +611,7 @@ async function createFile(user, body) {
     createdBy: user._id,
   });
 
-  if (body.fieldAgentId !== undefined) {
-    await applyFieldAgentAssignment(file, body.fieldAgentId);
-  }
+  await resolveFieldAgentOnFile(file, body);
 
   await file.save();
   return toPublicFile(file, user);
@@ -651,10 +651,7 @@ async function updateFile(user, id, body) {
     file.createdBy = await resolveAssignee(user, body.createdBy);
   }
 
-  // Tracking-only: which district RTO person is handling this file.
-  if (body.fieldAgentId !== undefined) {
-    await applyFieldAgentAssignment(file, body.fieldAgentId);
-  }
+  await resolveFieldAgentOnFile(file, body);
 
   await file.save();
   return toPublicFile(file, user);
@@ -674,17 +671,59 @@ async function resolveAssignee(actingUser, targetId) {
   return targetUser._id;
 }
 
+function clearFieldAgentOnFile(file) {
+  file.fieldAgentId = null;
+  file.fieldAgentName = '';
+  file.fieldAgentMobile = '';
+  file.fieldAgentRtoName = '';
+  file.fieldAgentDistrict = '';
+}
+
+function writeFieldAgentOnFile(file, agent) {
+  if (!agent) {
+    clearFieldAgentOnFile(file);
+    return;
+  }
+  file.fieldAgentId = agent._id;
+  file.fieldAgentName = agent.name;
+  file.fieldAgentMobile = agent.mobile || '';
+  file.fieldAgentRtoName = agent.rtoName || agent.district || '';
+  file.fieldAgentDistrict = '';
+}
+
+/** Map file to the registry agent for its RTO (one agent per office). */
+async function syncFieldAgentFromRto(file) {
+  const agent = await pickActiveFieldAgentForRto(file.rtoName);
+  writeFieldAgentOnFile(file, agent);
+}
+
 /**
- * Set / clear district field agent on a file (tracking label only).
- * Pass null or '' to clear.
+ * Apply field agent from request body on create/update.
+ * - explicit id: assign that agent (must match file RTO code)
+ * - explicit null/'' : re-sync from RTO registry
+ * - rtoName change without id: re-sync from RTO registry
+ */
+async function resolveFieldAgentOnFile(file, body) {
+  if (body.fieldAgentId !== undefined) {
+    const id = body.fieldAgentId;
+    if (id === null || id === '') {
+      await syncFieldAgentFromRto(file);
+      return;
+    }
+    await applyFieldAgentAssignment(file, id);
+    return;
+  }
+  if (body.rtoName !== undefined) {
+    await syncFieldAgentFromRto(file);
+  }
+}
+
+/**
+ * Set district field agent on a file (tracking label only).
  */
 async function applyFieldAgentAssignment(file, fieldAgentId) {
   if (fieldAgentId === null || fieldAgentId === '' || fieldAgentId === undefined) {
-    file.fieldAgentId = null;
-    file.fieldAgentName = '';
-    file.fieldAgentMobile = '';
-    file.fieldAgentRtoName = '';
-    file.fieldAgentDistrict = '';
+    clearFieldAgentOnFile(file);
     return;
   }
 
@@ -697,11 +736,13 @@ async function applyFieldAgentAssignment(file, fieldAgentId) {
     throw ApiError.badRequest('Field agent not found or inactive');
   }
 
-  file.fieldAgentId = agent._id;
-  file.fieldAgentName = agent.name;
-  file.fieldAgentMobile = agent.mobile || '';
-  file.fieldAgentRtoName = agent.rtoName || agent.district || '';
-  file.fieldAgentDistrict = '';
+  const fileKey = rtoMatchKey(file.rtoName);
+  const agentKey = rtoMatchKey(agent.rtoName || agent.district);
+  if (fileKey && agentKey && fileKey !== agentKey) {
+    throw ApiError.badRequest('Field agent does not match this file RTO');
+  }
+
+  writeFieldAgentOnFile(file, agent);
 }
 
 function getMissingRequiredDocuments(file) {
@@ -944,6 +985,7 @@ module.exports = {
   // domain helpers
   isHoldFile,
   matchesView,
+  buildSearchQuery,
   matchesSearch,
   requiresNewOwner,
   computeDashboardStats,
