@@ -4,6 +4,7 @@
  */
 const File = require('../models/File');
 const Dealer = require('../models/Dealer');
+const DealerInvoice = require('../models/DealerInvoice');
 const ApiError = require('../utils/apiError');
 const { exactInsensitive } = require('../utils/regex');
 const { isValidObjectId, toObjectId } = require('../utils/objectId');
@@ -23,6 +24,69 @@ const { linkLegacyFilesToDealer } = require('./dealer.service');
 const { dealerNameExactQuery } = require('../utils/dealerNameKey');
 
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
+
+function buildDealerBillingFileScope(dealer) {
+  const nameMatch = dealerNameExactQuery(dealer.name);
+  if (!nameMatch) return { dealerId: dealer._id };
+  return {
+    $or: [
+      { dealerId: dealer._id },
+      {
+        $and: [
+          { $or: [{ dealerId: null }, { dealerId: { $exists: false } }] },
+          { dealerName: nameMatch },
+        ],
+      },
+    ],
+  };
+}
+
+function normalizeDealerDisplayName(name) {
+  return String(name || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+async function findDealerInvoiceFilesByIds(dealer, rawFileIds, { requireUnpaid = false } = {}) {
+  await linkLegacyFilesToDealer(dealer);
+
+  const fileIds = Array.isArray(rawFileIds)
+    ? [...new Set(rawFileIds.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+  if (!fileIds.length) return [];
+  if (fileIds.some((id) => !isValidObjectId(id))) {
+    throw ApiError.badRequest('Invalid file id');
+  }
+
+  const objectIds = fileIds.map((id) => toObjectId(id)).filter(Boolean);
+  const queryParts = [
+    { _id: { $in: objectIds } },
+    { status: { $ne: 'paper_return' } },
+    buildDealerBillingFileScope(dealer),
+  ];
+  if (requireUnpaid) {
+    queryParts.push({ paymentDone: { $ne: true } });
+  }
+
+  return File.find(combineQueryParts(queryParts));
+}
+
+/** Validate invoice lines before create — same rules as billing file pick list. */
+async function assertInvoiceLinesBillable(dealer, lines) {
+  const ids = lines.map((line) => String(line.fileId));
+  const files = await findDealerInvoiceFilesByIds(dealer, ids, { requireUnpaid: true });
+  if (files.length !== lines.length) {
+    throw ApiError.badRequest(
+      'One or more files are invalid, already invoiced or paid, excluded, or belong to another dealer'
+    );
+  }
+  for (const file of files) {
+    const bill = Number(file.totalBill) || 0;
+    if (bill <= 0) {
+      throw ApiError.badRequest('Cannot invoice files with zero bill amount');
+    }
+  }
+}
 
 function appendRtoNameFilter(parts, rtoName) {
   if (!rtoName) return;
@@ -168,21 +232,12 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
   const scope = buildScopeQuery(user, filters.filterUserId);
   if (Object.keys(scope).length) parts.push(scope);
 
-  const nameMatch = dealerNameExactQuery(dealer.name);
-  const dealerScope = nameMatch
-    ? {
-        $or: [
-          { dealerId: dealer._id },
-          {
-            $and: [
-              { $or: [{ dealerId: null }, { dealerId: { $exists: false } }] },
-              { dealerName: nameMatch },
-            ],
-          },
-        ],
-      }
-    : { dealerId: dealer._id };
-  parts.push(dealerScope);
+  parts.push(buildDealerBillingFileScope(dealer));
+
+  const invoicedFileIds = await DealerInvoice.distinct('lines.fileId', { dealerId: dealer._id });
+  if (invoicedFileIds.length) {
+    parts.push({ _id: { $nin: invoicedFileIds } });
+  }
 
   /** Invoice only includes files still awaiting payment (not paper return). */
   parts.push({ paymentDone: { $ne: true } });
@@ -234,12 +289,7 @@ async function markDealerFilesInvoiced(user, dealerId, rawFileIds = []) {
     throw ApiError.badRequest('Invalid file id in fileIds');
   }
 
-  const objectIds = fileIds.map((id) => toObjectId(id)).filter(Boolean);
-  const files = await File.find({
-    _id: { $in: objectIds },
-    dealerId: dealer._id,
-    status: { $ne: 'paper_return' },
-  });
+  const files = await findDealerInvoiceFilesByIds(dealer, fileIds, { requireUnpaid: false });
 
   if (files.length !== fileIds.length) {
     throw ApiError.badRequest(
@@ -247,11 +297,17 @@ async function markDealerFilesInvoiced(user, dealerId, rawFileIds = []) {
     );
   }
 
+  const displayName = normalizeDealerDisplayName(dealer.name);
   const idsToMark = [];
   for (const file of files) {
     const bill = Number(file.totalBill) || 0;
     if (bill <= 0) {
       throw ApiError.badRequest('Cannot mark payment done for files with zero bill amount');
+    }
+    if (!file.dealerId) {
+      file.dealerId = dealer._id;
+      file.dealerName = displayName;
+      await file.save();
     }
     if (!file.paymentDone) {
       idsToMark.push(file._id);
@@ -259,10 +315,17 @@ async function markDealerFilesInvoiced(user, dealerId, rawFileIds = []) {
   }
 
   if (idsToMark.length) {
-    await File.updateMany({ _id: { $in: idsToMark } }, { $set: { paymentDone: true } });
+    await File.updateMany(
+      { _id: { $in: idsToMark } },
+      { $set: { paymentDone: true, dealerId: dealer._id, dealerName: displayName } }
+    );
   }
 
   return { updated: idsToMark.length, fileIds };
 }
 
-module.exports = { listFilesForDealerInvoice, markDealerFilesInvoiced };
+module.exports = {
+  listFilesForDealerInvoice,
+  markDealerFilesInvoiced,
+  assertInvoiceLinesBillable,
+};

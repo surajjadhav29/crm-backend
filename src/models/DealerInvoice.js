@@ -30,7 +30,10 @@ const dealerInvoiceSchema = new mongoose.Schema(
   {
     dealerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Dealer', required: true, index: true },
     billNumber: { type: String, required: true, unique: true, trim: true },
-    invoiceSequence: { type: Number, min: 1, sparse: true, unique: true },
+    /** Same-day index (1 = first invoice that day → DDMM; 2+ → DDMM-2). */
+    invoiceSequence: { type: Number, min: 1 },
+    /** DDMM digits from bill number (e.g. "2010"); legacy FY label otherwise. */
+    invoiceFy: { type: String, trim: true, default: '' },
     generatedAt: { type: Date, required: true, default: Date.now },
     dealerSnapshot: { type: dealerSnapshotSchema, required: true },
     lines: { type: [invoiceLineSchema], required: true },

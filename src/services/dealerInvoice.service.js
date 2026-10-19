@@ -1,44 +1,66 @@
 const Dealer = require('../models/Dealer');
 const DealerInvoice = require('../models/DealerInvoice');
 const SequenceCounter = require('../models/SequenceCounter');
-const File = require('../models/File');
 const ApiError = require('../utils/apiError');
+const { escapeRegex } = require('../utils/regex');
 const { isValidObjectId, toObjectId } = require('../utils/objectId');
-const { markDealerFilesInvoiced } = require('./dealerInvoiceFiles.service');
-
-const INVOICE_SEQ_COUNTER_KEY = 'dealerInvoice';
-/** First reserved sequence is 100 (counter starts at 99, then $inc). */
-const INVOICE_SEQ_FLOOR = 99;
+const {
+  markDealerFilesInvoiced,
+  assertInvoiceLinesBillable,
+} = require('./dealerInvoiceFiles.service');
+const {
+  sequenceCounterKeyForDate,
+  formatDealerBillNumber,
+  parseDealerBillNumber,
+  billNumberPatternForDate,
+  startOfLocalDay,
+  startOfNextLocalDay,
+} = require('../utils/invoiceNumber');
 
 function trim(value) {
   return String(value || '').trim();
 }
 
-function parseLegacyBillNumberSequence(billNumber) {
-  const s = trim(billNumber);
-  if (/^\d+$/.test(s)) return parseInt(s, 10);
-  const tail = s.split('-').pop();
-  if (tail && /^\d+$/.test(tail)) return parseInt(tail, 10);
-  return 0;
-}
+async function maxDayIndexFromExistingInvoices(at) {
+  const dayStart = startOfLocalDay(at);
+  const dayEnd = startOfNextLocalDay(at);
+  const pattern = billNumberPatternForDate(at);
 
-async function ensureInvoiceSequenceCounter() {
-  const existing = await SequenceCounter.findOne({ key: INVOICE_SEQ_COUNTER_KEY });
-  if (existing) return existing;
+  const [byDate, byNumber] = await Promise.all([
+    DealerInvoice.find({ generatedAt: { $gte: dayStart, $lt: dayEnd } })
+      .select('billNumber invoiceSequence')
+      .lean(),
+    DealerInvoice.find({ billNumber: pattern }).select('billNumber invoiceSequence').lean(),
+  ]);
 
-  const rows = await DealerInvoice.find({}, { invoiceSequence: 1 }).lean();
-  let maxSeq = INVOICE_SEQ_FLOOR;
-  for (const row of rows) {
-    if (Number.isFinite(row.invoiceSequence) && row.invoiceSequence > 0) {
-      maxSeq = Math.max(maxSeq, row.invoiceSequence);
+  const seen = new Set();
+  let maxIndex = 0;
+  for (const row of [...byDate, ...byNumber]) {
+    const id = String(row._id || row.billNumber);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const parsed = parseDealerBillNumber(row.billNumber);
+    if (parsed?.sequence > 0) {
+      maxIndex = Math.max(maxIndex, parsed.sequence);
+    } else if (Number.isFinite(row.invoiceSequence) && row.invoiceSequence > 0) {
+      maxIndex = Math.max(maxIndex, row.invoiceSequence);
     }
   }
+  return maxIndex;
+}
+
+async function ensureDailyInvoiceCounter(at = new Date()) {
+  const key = sequenceCounterKeyForDate(at);
+  const existing = await SequenceCounter.findOne({ key });
+  if (existing) return existing;
+
+  const maxIndex = await maxDayIndexFromExistingInvoices(at);
 
   try {
-    return await SequenceCounter.create({ key: INVOICE_SEQ_COUNTER_KEY, seq: maxSeq });
+    return await SequenceCounter.create({ key, seq: maxIndex });
   } catch (err) {
     if (err?.code === 11000) {
-      return SequenceCounter.findOne({ key: INVOICE_SEQ_COUNTER_KEY });
+      return SequenceCounter.findOne({ key });
     }
     throw err;
   }
@@ -48,23 +70,28 @@ async function peekNextBillNumber(user) {
   if (user?.role !== 'superadmin') {
     throw ApiError.forbidden('Only an admin can view billing invoices');
   }
-  await ensureInvoiceSequenceCounter();
-  const counter = await SequenceCounter.findOne({ key: INVOICE_SEQ_COUNTER_KEY });
-  const next = (counter?.seq ?? INVOICE_SEQ_FLOOR) + 1;
-  return String(next);
+  const at = new Date();
+  await ensureDailyInvoiceCounter(at);
+  const key = sequenceCounterKeyForDate(at);
+  const counter = await SequenceCounter.findOne({ key });
+  const nextIndex = (counter?.seq ?? 0) + 1;
+  return formatDealerBillNumber(nextIndex, at);
 }
 
-async function reserveNextBillNumber() {
-  await ensureInvoiceSequenceCounter();
-  const updated = await SequenceCounter.findOneAndUpdate(
-    { key: INVOICE_SEQ_COUNTER_KEY },
-    { $inc: { seq: 1 } },
-    { new: true }
-  );
+async function reserveNextBillNumber(at = new Date()) {
+  await ensureDailyInvoiceCounter(at);
+  const key = sequenceCounterKeyForDate(at);
+  const updated = await SequenceCounter.findOneAndUpdate({ key }, { $inc: { seq: 1 } }, { new: true });
   if (!updated) {
     throw ApiError.badRequest('Could not allocate invoice number');
   }
-  return { billNumber: String(updated.seq), invoiceSequence: updated.seq };
+  const billNumber = formatDealerBillNumber(updated.seq, at);
+  const parsed = parseDealerBillNumber(billNumber);
+  return {
+    billNumber,
+    invoiceSequence: updated.seq,
+    invoiceFy: parsed?.month ? `${parsed.day || ''}${parsed.month}` : '',
+  };
 }
 
 function parseMoney(value) {
@@ -109,25 +136,9 @@ function normalizeLines(rawLines) {
   });
 }
 
-async function assertLinesBelongToDealer(dealerId, lines) {
-  const ids = lines.map((l) => l.fileId);
-  const files = await File.find({
-    _id: { $in: ids },
-    dealerId,
-    paymentDone: { $ne: true },
-    status: { $ne: 'paper_return' },
-  });
-  if (files.length !== lines.length) {
-    throw ApiError.badRequest(
-      'One or more files are invalid, already paid, excluded, or belong to another dealer'
-    );
-  }
-}
-
-async function maybeMarkFilesPaid(user, dealerId, invoice) {
-  const total = parseMoney(invoice.totalAmount);
-  const received = parseMoney(invoice.receivedAmount);
-  if (received < total || invoice.filesMarkedPaid) return invoice;
+/** Once a file is on a saved dealer invoice, mark paymentDone so it leaves the billing pick list. */
+async function markInvoiceLineFilesPaid(user, dealerId, invoice) {
+  if (invoice.filesMarkedPaid) return invoice;
 
   const fileIds = invoice.lines.map((l) => String(l.fileId));
   await markDealerFilesInvoiced(user, String(dealerId), fileIds);
@@ -136,7 +147,28 @@ async function maybeMarkFilesPaid(user, dealerId, invoice) {
   return invoice;
 }
 
-async function listInvoices(user, { dealerId, limit = 50 } = {}) {
+function buildInvoiceTrackingSearchQuery(rawSearch) {
+  const search = trim(rawSearch);
+  if (!search) return null;
+
+  const or = [
+    { billNumber: new RegExp(escapeRegex(search), 'i') },
+    { 'dealerSnapshot.name': new RegExp(escapeRegex(search), 'i') },
+  ];
+
+  const digits = search.replace(/[^\d]/g, '');
+  if (digits.length >= 1) {
+    const num = Number(digits);
+    if (Number.isFinite(num)) {
+      or.push({ totalAmount: num });
+      or.push({ receivedAmount: num });
+    }
+  }
+
+  return { $or: or };
+}
+
+async function listInvoices(user, { dealerId, page = 1, pageSize = 20, limit, q = '' } = {}) {
   if (user?.role !== 'superadmin') {
     throw ApiError.forbidden('Only an admin can view billing invoices');
   }
@@ -145,9 +177,48 @@ async function listInvoices(user, { dealerId, limit = 50 } = {}) {
     if (!isValidObjectId(dealerId)) throw ApiError.badRequest('Invalid dealer id');
     query.dealerId = toObjectId(dealerId);
   }
-  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
-  const rows = await DealerInvoice.find(query).sort({ generatedAt: -1 }).limit(safeLimit);
-  return rows.map((row) => row.toJSON());
+
+  const searchQuery = buildInvoiceTrackingSearchQuery(q);
+  if (searchQuery) {
+    if (query.dealerId) {
+      query.$and = [{ dealerId: query.dealerId }, searchQuery];
+      delete query.dealerId;
+    } else {
+      Object.assign(query, searchQuery);
+    }
+  }
+
+  const legacyLimit = Number(limit);
+  const safePageSize = Math.min(
+    Math.max(Number(pageSize) || (Number.isFinite(legacyLimit) ? legacyLimit : 20), 1),
+    100
+  );
+  const safePage = Math.max(Number(page) || 1, 1);
+  const skip = (safePage - 1) * safePageSize;
+
+  const [total, rows] = await Promise.all([
+    DealerInvoice.countDocuments(query),
+    DealerInvoice.find(query).sort({ generatedAt: -1 }).skip(skip).limit(safePageSize),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / safePageSize) || 1);
+  const pageClamped = Math.min(safePage, totalPages);
+
+  let invoiceRows = rows;
+  if (pageClamped !== safePage && total > 0) {
+    invoiceRows = await DealerInvoice.find(query)
+      .sort({ generatedAt: -1 })
+      .skip((pageClamped - 1) * safePageSize)
+      .limit(safePageSize);
+  }
+
+  return {
+    invoices: invoiceRows.map((row) => row.toJSON()),
+    total,
+    page: pageClamped,
+    pageSize: safePageSize,
+    totalPages,
+  };
 }
 
 async function getInvoice(user, dealerId, invoiceId) {
@@ -176,23 +247,27 @@ async function createInvoice(user, dealerId, body = {}) {
   const dealer = await Dealer.findById(dealerId);
   if (!dealer) throw ApiError.notFound('Dealer not found');
 
+  const generatedAt = body.generatedAt ? new Date(body.generatedAt) : new Date();
+
   let billNumber = trim(body.billNumber);
   let invoiceSequence;
+  let invoiceFy = '';
   if (billNumber) {
     const existing = await DealerInvoice.findOne({ billNumber });
     if (existing) throw ApiError.conflict('An invoice with this number already exists');
-    const parsed = parseLegacyBillNumberSequence(billNumber);
-    if (/^\d+$/.test(billNumber) && parsed >= 100) {
-      invoiceSequence = parsed;
-    }
+    const parsed = parseDealerBillNumber(billNumber);
+    if (parsed?.sequence) invoiceSequence = parsed.sequence;
+    if (parsed?.month) invoiceFy = `${parsed.day || ''}${parsed.month}`;
+    else if (parsed?.fy) invoiceFy = parsed.fy;
   } else {
-    const allocated = await reserveNextBillNumber();
+    const allocated = await reserveNextBillNumber(generatedAt);
     billNumber = allocated.billNumber;
     invoiceSequence = allocated.invoiceSequence;
+    invoiceFy = allocated.invoiceFy;
   }
 
   const lines = normalizeLines(body.lines);
-  await assertLinesBelongToDealer(dealer._id, lines);
+  await assertInvoiceLinesBillable(dealer, lines);
 
   const totalAmount = lines.reduce((sum, line) => sum + line.amount, 0);
   const receivedAmount = parseMoney(body.receivedAmount);
@@ -200,11 +275,12 @@ async function createInvoice(user, dealerId, body = {}) {
     throw ApiError.badRequest('receivedAmount cannot exceed invoice total');
   }
 
-  const invoice = await DealerInvoice.create({
+  let invoice = await DealerInvoice.create({
     dealerId: dealer._id,
     billNumber,
     invoiceSequence,
-    generatedAt: body.generatedAt ? new Date(body.generatedAt) : new Date(),
+    invoiceFy,
+    generatedAt,
     dealerSnapshot: dealerSnapshotFrom(dealer),
     lines,
     totalAmount,
@@ -212,7 +288,13 @@ async function createInvoice(user, dealerId, body = {}) {
     createdBy: user._id,
   });
 
-  await maybeMarkFilesPaid(user, dealer._id, invoice);
+  try {
+    invoice = await markInvoiceLineFilesPaid(user, dealer._id, invoice);
+  } catch {
+    // Keep invoice in history even if file payment flags fail (admin can run sync-legacy-files).
+    invoice.filesMarkedPaid = false;
+    await invoice.save();
+  }
   return invoice.toJSON();
 }
 
@@ -242,8 +324,31 @@ async function updateInvoiceReceived(user, dealerId, invoiceId, body = {}) {
 
   invoice.receivedAmount = receivedAmount;
   await invoice.save();
-  await maybeMarkFilesPaid(user, dealerId, invoice);
+  await markInvoiceLineFilesPaid(user, dealerId, invoice);
   return invoice.toJSON();
+}
+
+/** Backfill paymentDone for files on saved invoices (e.g. before mark-on-create fix). */
+async function repairInvoicedFilesPaymentDone(user) {
+  if (user?.role !== 'superadmin') {
+    throw ApiError.forbidden('Only an admin can repair invoiced files');
+  }
+  const invoices = await DealerInvoice.find({});
+  let invoicesProcessed = 0;
+  let filesMarked = 0;
+  for (const invoice of invoices) {
+    const wasMarked = invoice.filesMarkedPaid;
+    try {
+      await markInvoiceLineFilesPaid(user, invoice.dealerId, invoice);
+      invoicesProcessed += 1;
+      if (!wasMarked) {
+        filesMarked += (invoice.lines || []).length;
+      }
+    } catch {
+      // Skip broken rows; admin can fix dealer/file linkage manually.
+    }
+  }
+  return { invoicesProcessed, filesMarked, invoiceCount: invoices.length };
 }
 
 module.exports = {
@@ -252,4 +357,5 @@ module.exports = {
   createInvoice,
   updateInvoiceReceived,
   peekNextBillNumber,
+  repairInvoicedFilesPaymentDone,
 };

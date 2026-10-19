@@ -37,9 +37,10 @@ async function update(req, res) {
   return res.status(200).json({ dealer });
 }
 
-async function syncLegacyDealerFiles(_req, res) {
-  const result = await dealerService.backfillAllLegacyDealerFileLinks();
-  return res.status(200).json(result);
+async function syncLegacyDealerFiles(req, res) {
+  const dealerLinks = await dealerService.backfillAllLegacyDealerFileLinks();
+  const invoicedFiles = await dealerInvoiceService.repairInvoicedFilesPaymentDone(req.user);
+  return res.status(200).json({ ...dealerLinks, invoicedFiles });
 }
 
 async function markInvoiced(req, res) {
@@ -52,11 +53,14 @@ async function markInvoiced(req, res) {
 }
 
 async function listBillingInvoices(req, res) {
-  const invoices = await dealerInvoiceService.listInvoices(req.user, {
+  const result = await dealerInvoiceService.listInvoices(req.user, {
     dealerId: req.query.dealerId,
+    page: req.query.page,
+    pageSize: req.query.pageSize,
     limit: req.query.limit,
+    q: req.query.q,
   });
-  return res.status(200).json({ invoices });
+  return res.status(200).json(result);
 }
 
 async function peekNextBillingInvoiceNumber(req, res) {
@@ -65,11 +69,14 @@ async function peekNextBillingInvoiceNumber(req, res) {
 }
 
 async function listDealerBillingInvoices(req, res) {
-  const invoices = await dealerInvoiceService.listInvoices(req.user, {
+  const result = await dealerInvoiceService.listInvoices(req.user, {
     dealerId: req.params.dealerId,
+    page: req.query.page,
+    pageSize: req.query.pageSize,
     limit: req.query.limit,
+    q: req.query.q,
   });
-  return res.status(200).json({ invoices });
+  return res.status(200).json(result);
 }
 
 async function getDealerBillingInvoice(req, res) {
