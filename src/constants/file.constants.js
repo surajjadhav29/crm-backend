@@ -11,6 +11,10 @@ const FILE_STATUSES = [
   'done',
 ];
 
+/** Physical custody of file papers (not the same as workflow status). */
+const PAPER_LOCATIONS = ['paper_in_office', 'paper_with_field_agent'];
+const DEFAULT_PAPER_LOCATION = 'paper_in_office';
+
 // Fields a client is allowed to set/change on a file (mass-assignment guard).
 const EDITABLE_FIELDS = [
   'dealerId',
@@ -29,6 +33,7 @@ const EDITABLE_FIELDS = [
   'remarks',
   'documents',
   'requiredDocuments',
+  'paperLocation',
 ];
 
 // Fields required to create a file.
@@ -73,6 +78,8 @@ const FILE_NUMBER_COUNTER_ID = 'fileNumber';
 
 module.exports = {
   FILE_STATUSES,
+  PAPER_LOCATIONS,
+  DEFAULT_PAPER_LOCATION,
   EDITABLE_FIELDS,
   REQUIRED_CREATE_FIELDS,
   EXPENSE_FIELDS,

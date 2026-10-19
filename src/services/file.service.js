@@ -16,6 +16,8 @@ const {
   FILE_NUMBER_PREFIX,
   FILE_NUMBER_BASE,
   FILE_NUMBER_COUNTER_ID,
+  PAPER_LOCATIONS,
+  DEFAULT_PAPER_LOCATION,
 } = require('../constants/file.constants');
 const { normalizeDocuments, normalizeWorkTypeName } = require('../constants/workType.constants');
 const { todayDateString, buildDateFilterQuery, matchesDateFilter } = require('../utils/date');
@@ -427,7 +429,51 @@ function pickEditableFields(body) {
   if (payload.requiredDocuments !== undefined) {
     payload.requiredDocuments = normalizeDocuments(payload.requiredDocuments);
   }
+  if (payload.paperLocation !== undefined) {
+    payload.paperLocation = normalizePaperLocation(payload.paperLocation, { strict: true });
+  }
   return payload;
+}
+
+function paperLocationLabel(location) {
+  return location === 'paper_with_field_agent' ? 'Paper with field agent' : 'Paper in office';
+}
+
+function normalizePaperLocation(value, { strict = false } = {}) {
+  const raw = String(value || '').trim();
+  if (PAPER_LOCATIONS.includes(raw)) return raw;
+  if (strict && raw) {
+    throw ApiError.badRequest('Invalid paper location');
+  }
+  return DEFAULT_PAPER_LOCATION;
+}
+
+function initializePaperLocation(file, rawLocation, at = new Date()) {
+  const location = normalizePaperLocation(rawLocation);
+  file.paperLocation = location;
+  file.paperLocationHistory = [
+    {
+      location,
+      at,
+      note: paperLocationLabel(location),
+    },
+  ];
+}
+
+function applyPaperLocationUpdate(file, rawNext) {
+  const next = normalizePaperLocation(rawNext, { strict: true });
+  const prev = normalizePaperLocation(file.paperLocation);
+  if (next === prev) return;
+  file.paperLocation = next;
+  if (!Array.isArray(file.paperLocationHistory)) {
+    file.paperLocationHistory = [];
+  }
+  file.paperLocationHistory.push({
+    location: next,
+    at: new Date(),
+    note: `${paperLocationLabel(prev)} → ${paperLocationLabel(next)}`,
+  });
+  file.markModified('paperLocationHistory');
 }
 
 /** Load WorkType from catalog. Lookup collapses spaces / case. */
@@ -601,6 +647,9 @@ async function createFile(user, body) {
   await assertFileUnique(payload.vehicleNo, payload.workType);
 
   const createdAt = new Date();
+  const paperLocationInput = payload.paperLocation;
+  delete payload.paperLocation;
+
   const file = new File({
     ...payload,
     fileNumber: await nextFileNumber(),
@@ -610,6 +659,8 @@ async function createFile(user, body) {
     statusHistory: [{ status: 'pending', at: createdAt, note: 'File created' }],
     createdBy: user._id,
   });
+
+  initializePaperLocation(file, paperLocationInput, createdAt);
 
   await resolveFieldAgentOnFile(file, body);
 
@@ -635,6 +686,9 @@ async function updateFile(user, id, body) {
     }
   }
 
+  const paperLocationInput = payload.paperLocation;
+  delete payload.paperLocation;
+
   Object.assign(file, payload);
 
   if (body.vehicleNo !== undefined || body.workType !== undefined) {
@@ -652,6 +706,10 @@ async function updateFile(user, id, body) {
   }
 
   await resolveFieldAgentOnFile(file, body);
+
+  if (paperLocationInput !== undefined) {
+    applyPaperLocationUpdate(file, paperLocationInput);
+  }
 
   await file.save();
   return toPublicFile(file, user);

@@ -177,15 +177,21 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
     $or: [{ dealerId: dealer._id }, { dealerName: exactInsensitive(dealer.name) }],
   });
 
-  /** Invoice only includes files still awaiting payment. */
+  /** Invoice only includes files still awaiting payment (not paper return). */
   parts.push({ paymentDone: { $ne: true } });
+  parts.push({ status: { $ne: 'paper_return' } });
 
   appendInvoiceFilters(parts, filters);
 
   const query = combineQueryParts(parts);
 
   let rows = await File.find(query).sort(FILE_LIST_SORT);
-  rows = rows.filter((f) => matchesDealerFileRecord(f, dealer) && !f.paymentDone);
+  rows = rows.filter(
+    (f) =>
+      matchesDealerFileRecord(f, dealer) &&
+      !f.paymentDone &&
+      String(f.status || '') !== 'paper_return'
+  );
   if (hasActiveInvoiceFilters(filters)) {
     rows = rows.filter((f) => matchesInvoiceFilters(f, filters, user));
   }

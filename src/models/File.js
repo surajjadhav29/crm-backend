@@ -34,6 +34,19 @@ const statusHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const paperLocationHistorySchema = new mongoose.Schema(
+  {
+    location: {
+      type: String,
+      enum: ['paper_in_office', 'paper_with_field_agent'],
+      required: true,
+    },
+    at: { type: Date, default: Date.now },
+    note: { type: String, default: '' },
+  },
+  { _id: false }
+);
+
 const fileSchema = new mongoose.Schema(
   {
     fileNumber: { type: String, required: true, unique: true },
@@ -46,6 +59,12 @@ const fileSchema = new mongoose.Schema(
     dealerName: { type: String, required: true },
     dealerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Dealer', default: null },
     workType: { type: String, required: true },
+    paperLocation: {
+      type: String,
+      enum: ['paper_in_office', 'paper_with_field_agent'],
+      default: 'paper_in_office',
+    },
+    paperLocationHistory: { type: [paperLocationHistorySchema], default: [] },
     // Uniqueness is (vehicleNo + workType) — same vehicle can have multiple work types.
     vehicleNo: { type: String, required: true, uppercase: true, trim: true },
     vehicleModel: { type: String, required: true },
@@ -99,6 +118,18 @@ const fileSchema = new mongoose.Schema(
             at: entry.at instanceof Date ? entry.at.toISOString() : entry.at,
             note: entry.note || '',
           }));
+        }
+        if (!ret.paperLocation) {
+          ret.paperLocation = 'paper_in_office';
+        }
+        if (Array.isArray(ret.paperLocationHistory)) {
+          ret.paperLocationHistory = ret.paperLocationHistory.map((entry) => ({
+            location: entry.location,
+            at: entry.at instanceof Date ? entry.at.toISOString() : entry.at,
+            note: entry.note || '',
+          }));
+        } else {
+          ret.paperLocationHistory = [];
         }
         delete ret._id;
         delete ret.__v;
