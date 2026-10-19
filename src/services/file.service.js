@@ -6,6 +6,7 @@ const FieldAgent = require('../models/FieldAgent');
 const Dealer = require('../models/Dealer');
 const ApiError = require('../utils/apiError');
 const { escapeRegex, exactInsensitive } = require('../utils/regex');
+const { dealerNameKey } = require('../utils/dealerNameKey');
 const { isValidObjectId, toObjectId } = require('../utils/objectId');
 const {
   FILE_STATUSES,
@@ -414,8 +415,13 @@ async function attachDealer(payload, currentDealerId) {
 
   if (!payload.dealerName) return;
 
-  const dealer = await Dealer.findOne({ name: exactInsensitive(String(payload.dealerName).trim()) });
-  if (dealer) payload.dealerId = dealer._id;
+  const key = dealerNameKey(String(payload.dealerName).trim());
+  if (!key) return;
+  const dealer = await Dealer.findOne({ nameKey: key });
+  if (dealer) {
+    payload.dealerId = dealer._id;
+    payload.dealerName = dealer.name;
+  }
 }
 
 function pickEditableFields(body) {

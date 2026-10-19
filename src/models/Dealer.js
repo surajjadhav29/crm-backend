@@ -1,8 +1,11 @@
 const mongoose = require('mongoose');
+const { dealerNameKey } = require('../utils/dealerNameKey');
 
 const dealerSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
+    /** Uppercase, collapsed spaces — unique registry name. */
+    nameKey: { type: String, required: true, trim: true, unique: true },
     email: { type: String, required: true, trim: true, lowercase: true, unique: true },
     phone: { type: String, required: true, trim: true, unique: true },
     address: { type: String, required: true, trim: true },
@@ -20,10 +23,17 @@ const dealerSchema = new mongoose.Schema(
         ret.createdBy = ret.createdBy.toString();
         delete ret._id;
         delete ret.__v;
+        delete ret.nameKey;
         return ret;
       },
     },
   }
 );
+
+dealerSchema.pre('validate', function setNameKey() {
+  if (this.name) {
+    this.nameKey = dealerNameKey(this.name);
+  }
+});
 
 module.exports = mongoose.model('Dealer', dealerSchema);

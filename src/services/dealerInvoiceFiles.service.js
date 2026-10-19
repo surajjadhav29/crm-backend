@@ -6,7 +6,7 @@ const File = require('../models/File');
 const Dealer = require('../models/Dealer');
 const ApiError = require('../utils/apiError');
 const { exactInsensitive } = require('../utils/regex');
-const { isValidObjectId } = require('../utils/objectId');
+const { isValidObjectId, toObjectId } = require('../utils/objectId');
 const {
   buildDateFilterQuery,
   buildDateRangeFilterQuery,
@@ -19,6 +19,8 @@ const {
   matchesSearch,
   buildSearchQuery,
 } = require('./file.service');
+const { linkLegacyFilesToDealer } = require('./dealer.service');
+const { dealerNameExactQuery } = require('../utils/dealerNameKey');
 
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
 
@@ -97,15 +99,6 @@ function hasActiveInvoiceFilters(filters) {
   );
 }
 
-function matchesDealerFileRecord(file, dealer) {
-  const doc = typeof file.toObject === 'function' ? file.toObject() : file;
-  const dealerId = doc.dealerId ? String(doc.dealerId) : '';
-  if (dealerId && dealerId === String(dealer._id)) return true;
-  const fileName = String(doc.dealerName || '').trim().toLowerCase();
-  const dealerName = String(dealer.name || '').trim().toLowerCase();
-  return Boolean(fileName && dealerName && fileName === dealerName);
-}
-
 function matchesDateRangeFilter(file, dateFrom, dateTo) {
   const q = buildDateRangeFilterQuery({ dateFrom, dateTo });
   if (!q) return true;
@@ -164,18 +157,32 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
     throw ApiError.badRequest('Invalid dealer id');
   }
 
-  const dealer = await Dealer.findById(dealerId).select('name');
+  const dealer = await Dealer.findById(dealerId);
   if (!dealer) {
     throw ApiError.notFound('Dealer not found');
   }
+
+  await linkLegacyFilesToDealer(dealer);
 
   const parts = [];
   const scope = buildScopeQuery(user, filters.filterUserId);
   if (Object.keys(scope).length) parts.push(scope);
 
-  parts.push({
-    $or: [{ dealerId: dealer._id }, { dealerName: exactInsensitive(dealer.name) }],
-  });
+  const nameMatch = dealerNameExactQuery(dealer.name);
+  const dealerScope = nameMatch
+    ? {
+        $or: [
+          { dealerId: dealer._id },
+          {
+            $and: [
+              { $or: [{ dealerId: null }, { dealerId: { $exists: false } }] },
+              { dealerName: nameMatch },
+            ],
+          },
+        ],
+      }
+    : { dealerId: dealer._id };
+  parts.push(dealerScope);
 
   /** Invoice only includes files still awaiting payment (not paper return). */
   parts.push({ paymentDone: { $ne: true } });
@@ -187,10 +194,7 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
 
   let rows = await File.find(query).sort(FILE_LIST_SORT);
   rows = rows.filter(
-    (f) =>
-      matchesDealerFileRecord(f, dealer) &&
-      !f.paymentDone &&
-      String(f.status || '') !== 'paper_return'
+    (f) => !f.paymentDone && String(f.status || '') !== 'paper_return'
   );
   if (hasActiveInvoiceFilters(filters)) {
     rows = rows.filter((f) => matchesInvoiceFilters(f, filters, user));
@@ -202,4 +206,63 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
   };
 }
 
-module.exports = { listFilesForDealerInvoice };
+async function markDealerFilesInvoiced(user, dealerId, rawFileIds = []) {
+  if (user?.role !== 'superadmin') {
+    throw ApiError.forbidden('Only an admin can mark dealer invoice payments');
+  }
+
+  if (!isValidObjectId(dealerId)) {
+    throw ApiError.badRequest('Invalid dealer id');
+  }
+
+  const dealer = await Dealer.findById(dealerId).select('_id name');
+  if (!dealer) {
+    throw ApiError.notFound('Dealer not found');
+  }
+
+  await linkLegacyFilesToDealer(dealer);
+
+  const fileIds = Array.isArray(rawFileIds)
+    ? [...new Set(rawFileIds.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+
+  if (!fileIds.length) {
+    throw ApiError.badRequest('fileIds is required');
+  }
+
+  if (fileIds.some((id) => !isValidObjectId(id))) {
+    throw ApiError.badRequest('Invalid file id in fileIds');
+  }
+
+  const objectIds = fileIds.map((id) => toObjectId(id)).filter(Boolean);
+  const files = await File.find({
+    _id: { $in: objectIds },
+    dealerId: dealer._id,
+    status: { $ne: 'paper_return' },
+  });
+
+  if (files.length !== fileIds.length) {
+    throw ApiError.badRequest(
+      'One or more files were not found, excluded from billing, or belong to another dealer'
+    );
+  }
+
+  const idsToMark = [];
+  for (const file of files) {
+    const bill = Number(file.totalBill) || 0;
+    if (bill <= 0) {
+      throw ApiError.badRequest('Cannot mark payment done for files with zero bill amount');
+    }
+    if (!file.paymentDone) {
+      idsToMark.push(file._id);
+    }
+  }
+
+  if (idsToMark.length) {
+    await File.updateMany({ _id: { $in: idsToMark } }, { $set: { paymentDone: true } });
+  }
+
+  return { updated: idsToMark.length, fileIds };
+}
+
+module.exports = { listFilesForDealerInvoice, markDealerFilesInvoiced };

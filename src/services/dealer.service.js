@@ -1,6 +1,8 @@
 const Dealer = require('../models/Dealer');
+const File = require('../models/File');
 const ApiError = require('../utils/apiError');
 const { isValidObjectId } = require('../utils/objectId');
+const { dealerNameKey, dealerNameExactQuery } = require('../utils/dealerNameKey');
 
 function trim(value) {
   return String(value || '').trim();
@@ -17,6 +19,89 @@ async function findDealer(id) {
   }
 
   return dealer;
+}
+
+async function assertUniqueDealerName(name, excludeId) {
+  const key = dealerNameKey(name);
+  if (!key) throw ApiError.badRequest('Dealer name is required');
+  const query = { nameKey: key };
+  if (excludeId) query._id = { $ne: excludeId };
+  const existing = await Dealer.findOne(query).select('_id name');
+  if (existing) {
+    throw ApiError.conflict('A dealer with this name already exists');
+  }
+}
+
+function legacyFileDealerNameQuery(dealerName) {
+  const nameMatch = dealerNameExactQuery(dealerName);
+  if (!nameMatch) return null;
+  return {
+    $or: [{ dealerId: null }, { dealerId: { $exists: false } }],
+    dealerName: nameMatch,
+  };
+}
+
+/** Attach dealerId to files that only have dealerName (same normalized name). */
+async function linkLegacyFilesToDealer(dealer) {
+  const query = legacyFileDealerNameQuery(dealer.name);
+  if (!query) return { matched: 0, updated: 0 };
+
+  const displayName = trim(dealer.name).replace(/\s+/g, ' ');
+  const result = await File.updateMany(query, {
+    $set: { dealerId: dealer._id, dealerName: displayName },
+  });
+  return { matched: result.matchedCount ?? result.n ?? 0, updated: result.modifiedCount ?? result.nModified ?? 0 };
+}
+
+/** After rename, keep file dealerName in sync for rows already tied to this dealer. */
+async function syncFilesDealerNameForDealer(dealer, previousName) {
+  const prevKey = dealerNameKey(previousName);
+  const nextKey = dealerNameKey(dealer.name);
+  const displayName = trim(dealer.name).replace(/\s+/g, ' ');
+
+  if (prevKey && prevKey !== nextKey) {
+    await File.updateMany({ dealerId: dealer._id }, { $set: { dealerName: displayName } });
+  }
+
+  return linkLegacyFilesToDealer(dealer);
+}
+
+/** Populate nameKey on dealers created before the unique-name migration. */
+async function ensureDealerNameKeys() {
+  const dealers = await Dealer.find().select('_id name nameKey');
+  let updated = 0;
+  const conflicts = [];
+  for (const dealer of dealers) {
+    const key = dealerNameKey(dealer.name);
+    if (!key) continue;
+    if (dealer.nameKey === key) continue;
+    dealer.nameKey = key;
+    try {
+      await dealer.save();
+      updated += 1;
+    } catch (err) {
+      if (err?.code === 11000) {
+        conflicts.push({ name: dealer.name, dealerId: String(dealer._id) });
+      } else {
+        throw err;
+      }
+    }
+  }
+  return { updated, conflicts };
+}
+
+/** One-time / admin: link orphan files for every dealer in the registry. */
+async function backfillAllLegacyDealerFileLinks() {
+  const keyResult = await ensureDealerNameKeys();
+  const dealers = await Dealer.find().select('_id name');
+  let matched = 0;
+  let updated = 0;
+  for (const dealer of dealers) {
+    const stats = await linkLegacyFilesToDealer(dealer);
+    matched += stats.matched;
+    updated += stats.updated;
+  }
+  return { dealers: dealers.length, matched, updated, nameKeys: keyResult };
 }
 
 async function listDealers() {
@@ -51,6 +136,8 @@ async function createDealer(user, body = {}) {
     throw ApiError.badRequest('name, email, phone, address, city, state and zip are required');
   }
 
+  await assertUniqueDealerName(name);
+
   if (await Dealer.findOne({ email })) {
     throw ApiError.conflict('A dealer with this email already exists');
   }
@@ -70,14 +157,19 @@ async function createDealer(user, body = {}) {
     createdBy: user._id,
   });
 
+  await linkLegacyFilesToDealer(dealer);
+
   return dealer.toJSON();
 }
 
 async function updateDealer(id, { name, email, phone, address, city, state, zip, country } = {}) {
   const dealer = await findDealer(id);
+  const previousName = dealer.name;
 
   if (name && trim(name) !== dealer.name) {
-    dealer.name = trim(name);
+    const nextName = trim(name);
+    await assertUniqueDealerName(nextName, dealer._id);
+    dealer.name = nextName;
   }
   if (address && trim(address) !== dealer.address) {
     dealer.address = trim(address);
@@ -116,6 +208,11 @@ async function updateDealer(id, { name, email, phone, address, city, state, zip,
   }
 
   await dealer.save();
+
+  if (dealerNameKey(previousName) !== dealerNameKey(dealer.name)) {
+    await syncFilesDealerNameForDealer(dealer, previousName);
+  }
+
   return dealer.toJSON();
 }
 
@@ -125,4 +222,6 @@ module.exports = {
   getDealer,
   createDealer,
   updateDealer,
+  linkLegacyFilesToDealer,
+  backfillAllLegacyDealerFileLinks,
 };

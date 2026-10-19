@@ -1,5 +1,6 @@
 const dealerService = require('../services/dealer.service');
 const dealerInvoiceFilesService = require('../services/dealerInvoiceFiles.service');
+const dealerInvoiceService = require('../services/dealerInvoice.service');
 const { parseDealerInvoiceFiltersFromQuery } = require('../utils/dealerInvoiceFileFilters');
 
 async function list(_req, res) {
@@ -36,4 +37,82 @@ async function update(req, res) {
   return res.status(200).json({ dealer });
 }
 
-module.exports = { list, names, getOne, listDealerFiles, create, update };
+async function syncLegacyDealerFiles(_req, res) {
+  const result = await dealerService.backfillAllLegacyDealerFileLinks();
+  return res.status(200).json(result);
+}
+
+async function markInvoiced(req, res) {
+  const result = await dealerInvoiceFilesService.markDealerFilesInvoiced(
+    req.user,
+    req.params.id,
+    req.body?.fileIds
+  );
+  return res.status(200).json(result);
+}
+
+async function listBillingInvoices(req, res) {
+  const invoices = await dealerInvoiceService.listInvoices(req.user, {
+    dealerId: req.query.dealerId,
+    limit: req.query.limit,
+  });
+  return res.status(200).json({ invoices });
+}
+
+async function peekNextBillingInvoiceNumber(req, res) {
+  const billNumber = await dealerInvoiceService.peekNextBillNumber(req.user);
+  return res.status(200).json({ billNumber });
+}
+
+async function listDealerBillingInvoices(req, res) {
+  const invoices = await dealerInvoiceService.listInvoices(req.user, {
+    dealerId: req.params.dealerId,
+    limit: req.query.limit,
+  });
+  return res.status(200).json({ invoices });
+}
+
+async function getDealerBillingInvoice(req, res) {
+  const invoice = await dealerInvoiceService.getInvoice(
+    req.user,
+    req.params.dealerId,
+    req.params.invoiceId
+  );
+  return res.status(200).json({ invoice });
+}
+
+async function createDealerBillingInvoice(req, res) {
+  const invoice = await dealerInvoiceService.createInvoice(
+    req.user,
+    req.params.dealerId,
+    req.body
+  );
+  return res.status(201).json({ invoice });
+}
+
+async function updateDealerBillingInvoiceReceived(req, res) {
+  const invoice = await dealerInvoiceService.updateInvoiceReceived(
+    req.user,
+    req.params.dealerId,
+    req.params.invoiceId,
+    req.body
+  );
+  return res.status(200).json({ invoice });
+}
+
+module.exports = {
+  list,
+  names,
+  getOne,
+  listDealerFiles,
+  create,
+  update,
+  syncLegacyDealerFiles,
+  markInvoiced,
+  listBillingInvoices,
+  peekNextBillingInvoiceNumber,
+  listDealerBillingInvoices,
+  getDealerBillingInvoice,
+  createDealerBillingInvoice,
+  updateDealerBillingInvoiceReceived,
+};
