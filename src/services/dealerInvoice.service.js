@@ -257,9 +257,17 @@ async function createInvoice(user, dealerId, body = {}) {
   const dealer = await Dealer.findById(dealerId);
   if (!dealer) throw ApiError.notFound('Dealer not found');
 
-  const generatedAt = body.generatedAt ? new Date(body.generatedAt) : new Date();
+  let generatedAt = new Date();
+  if (body.generatedAt != null && body.generatedAt !== '') {
+    const parsed = new Date(body.generatedAt);
+    if (Number.isNaN(parsed.getTime())) {
+      throw ApiError.badRequest('Invalid generatedAt date');
+    }
+    generatedAt = parsed;
+  }
 
-  const allocated = await reserveNextBillNumber(generatedAt);
+  // Bill sequence always uses server "now" so clients cannot skew daily counters.
+  const allocated = await reserveNextBillNumber(new Date());
   const billNumber = allocated.billNumber;
   const invoiceSequence = allocated.invoiceSequence;
   const invoiceFy = allocated.invoiceFy;

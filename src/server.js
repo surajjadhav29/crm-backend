@@ -10,10 +10,11 @@ function startServer(currentPort) {
 
   server.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
-      const nextPort = currentPort + 1;
-      console.warn(`Port ${currentPort} is busy. Trying ${nextPort} instead.`);
-      server.close(() => startServer(nextPort));
-      return;
+      console.error(
+        `Port ${currentPort} is already in use. Stop the other process or set PORT to a free port. ` +
+          '(The Vite dev proxy expects the API on port 5000 by default.)'
+      );
+      process.exit(1);
     }
     console.error('Failed to start server:', error.message);
     process.exit(1);
