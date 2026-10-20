@@ -19,11 +19,44 @@ const {
   matchesSearch,
   buildSearchQuery,
 } = require('./file.service');
-const { linkLegacyFilesToDealer } = require('./dealer.service');
 const { dealerNameExactQuery } = require('../utils/dealerNameKey');
 const { splitFileExpensesForInvoice } = require('../utils/fileExpenseSplit');
 
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
+
+const BILLING_FILES_PAGE_SIZE_DEFAULT = 50;
+const BILLING_FILES_PAGE_SIZE_MAX = 200;
+const BILLING_FILES_RESOLVE_IDS_MAX = 300;
+
+/** Billing pick list does not need status / paper location history (large on old files). */
+const BILLING_FILE_LIST_PROJECTION = '-statusHistory -paperLocationHistory';
+
+function parseSafePage(value) {
+  return Math.max(1, parseInt(value, 10) || 1);
+}
+
+function parseSafePageSize(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) return BILLING_FILES_PAGE_SIZE_DEFAULT;
+  return Math.min(BILLING_FILES_PAGE_SIZE_MAX, n);
+}
+
+function parseResolveFileIds(raw) {
+  const ids = String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const unique = [...new Set(ids)];
+  if (unique.length > BILLING_FILES_RESOLVE_IDS_MAX) {
+    throw ApiError.badRequest(
+      `You can resolve at most ${BILLING_FILES_RESOLVE_IDS_MAX} files at once`
+    );
+  }
+  if (unique.some((id) => !isValidObjectId(id))) {
+    throw ApiError.badRequest('Invalid file id in fileIds');
+  }
+  return unique.map((id) => toObjectId(id)).filter(Boolean);
+}
 
 function buildDealerBillingFileScope(dealer) {
   const nameMatch = dealerNameExactQuery(dealer.name);
@@ -48,8 +81,6 @@ function normalizeDealerDisplayName(name) {
 }
 
 async function findDealerInvoiceFilesByIds(dealer, rawFileIds, { requireUnpaid = false } = {}) {
-  await linkLegacyFilesToDealer(dealer);
-
   const fileIds = Array.isArray(rawFileIds)
     ? [...new Set(rawFileIds.map((id) => String(id || '').trim()).filter(Boolean))]
     : [];
@@ -248,20 +279,7 @@ function matchesInvoiceFilters(file, filters, user) {
   return true;
 }
 
-async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
-  const filters = normalizeDealerInvoiceFilters(rawFilters);
-
-  if (!isValidObjectId(dealerId)) {
-    throw ApiError.badRequest('Invalid dealer id');
-  }
-
-  const dealer = await Dealer.findById(dealerId);
-  if (!dealer) {
-    throw ApiError.notFound('Dealer not found');
-  }
-
-  await linkLegacyFilesToDealer(dealer);
-
+function buildDealerInvoiceFileQuery(user, dealer, filters) {
   const parts = [];
   const scope = buildScopeQuery(user, filters.filterUserId);
   if (Object.keys(scope).length) parts.push(scope);
@@ -278,13 +296,81 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
 
   appendInvoiceFilters(parts, filters);
 
-  const query = combineQueryParts(parts);
+  return combineQueryParts(parts);
+}
 
-  const rows = await File.find(query).sort(FILE_LIST_SORT);
+async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
+  const filters = normalizeDealerInvoiceFilters(rawFilters);
+  const page = parseSafePage(rawFilters.page);
+  const pageSize = parseSafePageSize(rawFilters.pageSize);
+  const billableIdsOnly = Boolean(rawFilters.billableIdsOnly);
+  const resolveIdsRaw = rawFilters.fileIds;
+
+  if (!isValidObjectId(dealerId)) {
+    throw ApiError.badRequest('Invalid dealer id');
+  }
+
+  const dealer = await Dealer.findById(dealerId);
+  if (!dealer) {
+    throw ApiError.notFound('Dealer not found');
+  }
+
+  // Legacy dealerId backfill: POST /dealers/sync-legacy-files (or create/rename dealer).
+  // Billing queries still include name-only files via buildDealerBillingFileScope().
+  const query = buildDealerInvoiceFileQuery(user, dealer, filters);
+  const billableQuery = combineQueryParts([
+    query,
+    { totalBill: { $gt: 0 } },
+  ]);
+
+  if (billableIdsOnly) {
+    const rows = await File.find(billableQuery).select('_id').lean();
+    const fileIds = rows.map((row) => String(row._id));
+    return {
+      fileIds,
+      total: fileIds.length,
+      billableTotal: fileIds.length,
+    };
+  }
+
+  if (resolveIdsRaw) {
+    const objectIds = parseResolveFileIds(resolveIdsRaw);
+    if (!objectIds.length) {
+      return { files: [], total: 0, billableTotal: 0 };
+    }
+    const rows = await File.find({
+      $and: [query, { _id: { $in: objectIds } }],
+    })
+      .select(BILLING_FILE_LIST_PROJECTION)
+      .sort(FILE_LIST_SORT);
+    const files = rows.map((f) => toPublicFile(f, user));
+    return {
+      files,
+      total: files.length,
+      billableTotal: files.filter((f) => (Number(f.totalBill) || 0) > 0).length,
+    };
+  }
+
+  const skip = (page - 1) * pageSize;
+  const [total, billableTotal, rows] = await Promise.all([
+    File.countDocuments(query),
+    File.countDocuments(billableQuery),
+    File.find(query)
+      .select(BILLING_FILE_LIST_PROJECTION)
+      .sort(FILE_LIST_SORT)
+      .skip(skip)
+      .limit(pageSize),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize) || 1);
 
   return {
     files: rows.map((f) => toPublicFile(f, user)),
-    total: rows.length,
+    total,
+    billableTotal,
+    page,
+    pageSize,
+    totalPages,
   };
 }
 
@@ -303,8 +389,6 @@ async function markDealerFilesInvoiced(user, dealerId, rawFileIds = [], options 
   if (!dealer) {
     throw ApiError.notFound('Dealer not found');
   }
-
-  await linkLegacyFilesToDealer(dealer);
 
   const fileIds = Array.isArray(rawFileIds)
     ? [...new Set(rawFileIds.map((id) => String(id || '').trim()).filter(Boolean))]

@@ -27,6 +27,8 @@ async function analytics(req, res) {
 async function lists(req, res) {
   const result = await dashboardService.getLists(req.user, {
     filterUserId: req.query.userId,
+    overduePage: req.query.overduePage,
+    overduePageSize: req.query.overduePageSize,
   });
   return res.status(200).json(result);
 }

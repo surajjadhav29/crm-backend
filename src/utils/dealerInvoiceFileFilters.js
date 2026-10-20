@@ -27,19 +27,32 @@ function normalizeDealerInvoiceFilters(raw = {}) {
   };
 }
 
+function parseTruthyFlag(value) {
+  const raw = firstQueryValue(value);
+  if (raw === undefined || raw === null) return false;
+  const s = String(raw).trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'yes';
+}
+
 function parseDealerInvoiceFiltersFromQuery(query = {}) {
-  return normalizeDealerInvoiceFilters({
-    filterUserId: firstQueryValue(query.userId),
-    rtoName: firstQueryValue(query.rtoName),
-    workType: firstQueryValue(query.workType),
-    search: firstQueryValue(query.search),
-    date: firstQueryValue(query.date),
-    datePreset: firstQueryValue(query.datePreset),
-    dateFrom: firstQueryValue(query.dateFrom),
-    dateTo: firstQueryValue(query.dateTo),
-    minBill: firstQueryValue(query.minBill),
-    maxBill: firstQueryValue(query.maxBill),
-  });
+  return {
+    ...normalizeDealerInvoiceFilters({
+      filterUserId: firstQueryValue(query.userId),
+      rtoName: firstQueryValue(query.rtoName),
+      workType: firstQueryValue(query.workType),
+      search: firstQueryValue(query.search),
+      date: firstQueryValue(query.date),
+      datePreset: firstQueryValue(query.datePreset),
+      dateFrom: firstQueryValue(query.dateFrom),
+      dateTo: firstQueryValue(query.dateTo),
+      minBill: firstQueryValue(query.minBill),
+      maxBill: firstQueryValue(query.maxBill),
+    }),
+    page: firstQueryValue(query.page),
+    pageSize: firstQueryValue(query.pageSize),
+    fileIds: trimOrUndef(firstQueryValue(query.fileIds)),
+    billableIdsOnly: parseTruthyFlag(query.billableIdsOnly),
+  };
 }
 
 module.exports = {

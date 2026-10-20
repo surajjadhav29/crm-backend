@@ -90,7 +90,10 @@ async function ensureDealerNameKeys() {
   return { updated, conflicts };
 }
 
-/** One-time / admin: link orphan files for every dealer in the registry. */
+/**
+ * One-time / admin: link orphan files for every dealer in the registry.
+ * POST /dealers/sync-legacy-files — run after migrating old file rows to production.
+ */
 async function backfillAllLegacyDealerFileLinks() {
   const keyResult = await ensureDealerNameKeys();
   const dealers = await Dealer.find().select('_id name');

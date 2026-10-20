@@ -4,7 +4,45 @@ const { todayDateString } = require('../utils/date');
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const OBJECTION_REMINDER_DAYS = 3;
+const { isObjectionOverdue, sortOverdueObjections } = require('../utils/objectionReminder');
+
+const OVERDUE_OBJECTION_PAGE_SIZE_DEFAULT = 150;
+const OVERDUE_OBJECTION_PAGE_SIZE_MAX = 150;
+
+function parseOverduePage(value) {
+  return Math.max(1, parseInt(value, 10) || 1);
+}
+
+function parseOverduePageSize(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) return OVERDUE_OBJECTION_PAGE_SIZE_DEFAULT;
+  return Math.min(OVERDUE_OBJECTION_PAGE_SIZE_MAX, n);
+}
+
+async function listOverdueObjectionsForUser(user, { filterUserId, page = 1, pageSize } = {}) {
+  const safePage = parseOverduePage(page);
+  const safeSize = parseOverduePageSize(pageSize);
+  const baseMatch = buildListQuery(user, { type: 'all_records', filterUserId });
+
+  const objectionRaw = await File.find({
+    $and: [baseMatch, { status: 'objection' }],
+  }).sort({ lastStatusAt: 1, createdAt: 1 });
+
+  const overdueAll = sortOverdueObjections(objectionRaw.filter((f) => isObjectionOverdue(f)));
+  const total = overdueAll.length;
+  const totalPages = Math.max(1, Math.ceil(total / safeSize) || 1);
+  const pageClamped = total > 0 ? Math.min(safePage, totalPages) : 1;
+  const skip = (pageClamped - 1) * safeSize;
+  const pageRows = overdueAll.slice(skip, skip + safeSize);
+
+  return {
+    overdueObjections: pageRows.map((f) => toPublicFile(f, user)),
+    overdueTotal: total,
+    overduePage: pageClamped,
+    overduePageSize: safeSize,
+    overdueTotalPages: totalPages,
+  };
+}
 
 const STATUS_COLORS = {
   pending: '#c0392b',
@@ -157,32 +195,6 @@ function formatWorkTypeBreakdown(rows) {
     .sort((a, b) => b.value - a.value);
 }
 
-function getObjectionSince(file) {
-  if (String(file.status || '').toLowerCase() !== 'objection') return null;
-  const history = Array.isArray(file.statusHistory) ? file.statusHistory : [];
-  let latest = null;
-  for (const entry of history) {
-    if (String(entry?.status || '').toLowerCase() !== 'objection') continue;
-    const at = entry.at ? new Date(entry.at) : null;
-    if (!at || Number.isNaN(at.getTime())) continue;
-    if (!latest || at > latest) latest = at;
-  }
-  if (latest) return latest;
-  for (const field of ['lastStatusAt', 'updatedAt', 'createdAt']) {
-    const at = file[field] ? new Date(file[field]) : null;
-    if (at && !Number.isNaN(at.getTime())) return at;
-  }
-  return null;
-}
-
-function isObjectionOverdue(file, now = new Date()) {
-  const since = getObjectionSince(file);
-  if (!since) return false;
-  const ms = now.getTime() - since.getTime();
-  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
-  return days > OBJECTION_REMINDER_DAYS;
-}
-
 async function getAnalytics(user, { filterUserId, period = 'month' } = {}) {
   const safePeriod = ['week', 'month', 'year'].includes(period) ? period : 'month';
   const baseMatch = buildListQuery(user, { type: 'all_records', filterUserId });
@@ -209,7 +221,7 @@ async function getAnalytics(user, { filterUserId, period = 'month' } = {}) {
   };
 }
 
-async function getLists(user, { filterUserId } = {}) {
+async function getLists(user, { filterUserId, overduePage, overduePageSize } = {}) {
   const baseMatch = buildListQuery(user, { type: 'all_records', filterUserId });
   const today = todayDateString();
   const dayStart = new Date();
@@ -230,32 +242,27 @@ async function getLists(user, { filterUserId } = {}) {
     ],
   };
 
-  const [staffTodayRaw, objectionRaw] = await Promise.all([
+  const staffTodayRaw =
     user.role === 'superadmin' && filterUserId
-      ? File.find(staffTodayQuery).sort({ createdAt: -1 }).limit(200)
+      ? await File.find(staffTodayQuery).sort({ createdAt: -1 }).limit(200)
       : user.role === 'superadmin'
-        ? Promise.resolve([])
-        : File.find(staffTodayQuery).sort({ createdAt: -1 }).limit(200),
-    File.find({ $and: [baseMatch, { status: 'objection' }] })
-      .sort({ lastStatusAt: 1, createdAt: 1 })
-      .limit(150),
-  ]);
+        ? []
+        : await File.find(staffTodayQuery).sort({ createdAt: -1 }).limit(200);
 
-  const overdueObjections = objectionRaw
-    .filter((f) => isObjectionOverdue(f))
-    .sort((a, b) => {
-      const aSince = getObjectionSince(a)?.getTime() ?? 0;
-      const bSince = getObjectionSince(b)?.getTime() ?? 0;
-      return aSince - bSince;
-    });
+  const overdue = await listOverdueObjectionsForUser(user, {
+    filterUserId,
+    page: overduePage,
+    pageSize: overduePageSize,
+  });
 
   return {
     staffTodayFiles: staffTodayRaw.map((f) => toPublicFile(f, user)),
-    overdueObjections: overdueObjections.map((f) => toPublicFile(f, user)),
+    ...overdue,
   };
 }
 
 module.exports = {
   getAnalytics,
   getLists,
+  listOverdueObjectionsForUser,
 };
