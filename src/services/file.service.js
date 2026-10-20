@@ -565,8 +565,16 @@ async function listFiles(
     dateTo,
     datePreset,
   });
-  const files = await File.find(query).sort(FILE_LIST_SORT);
-  return { files: files.map((f) => toPublicFile(f, user)), total: files.length };
+  const MAX_UNPAGINATED_FILES = 10000;
+  const [files, total] = await Promise.all([
+    File.find(query).sort(FILE_LIST_SORT).limit(MAX_UNPAGINATED_FILES),
+    File.countDocuments(query),
+  ]);
+  return {
+    files: files.map((f) => toPublicFile(f, user)),
+    total,
+    truncated: total > files.length,
+  };
 }
 
 async function paginateFiles(
@@ -920,7 +928,10 @@ async function updateExpenses(user, id, body) {
   file.set('expenses', expenses);
   file.markModified('expenses');
   file.totalBill = sumExpenses(expenses);
-  file.paymentDone = Boolean(body.paymentDone);
+  // Only superadmin may change payment status (invoice create / admin re-bill workflow).
+  if (user.role === 'superadmin') {
+    file.paymentDone = Boolean(body.paymentDone);
+  }
 
   await file.save();
   return toPublicFile(file, user);
@@ -1073,4 +1084,5 @@ module.exports = {
   deleteFile,
   bulkFiles,
   getStatsFor,
+  buildListQuery,
 };

@@ -4,7 +4,6 @@
  */
 const File = require('../models/File');
 const Dealer = require('../models/Dealer');
-const DealerInvoice = require('../models/DealerInvoice');
 const ApiError = require('../utils/apiError');
 const { exactInsensitive } = require('../utils/regex');
 const { isValidObjectId, toObjectId } = require('../utils/objectId');
@@ -22,6 +21,7 @@ const {
 } = require('./file.service');
 const { linkLegacyFilesToDealer } = require('./dealer.service');
 const { dealerNameExactQuery } = require('../utils/dealerNameKey');
+const { splitFileExpensesForInvoice } = require('../utils/fileExpenseSplit');
 
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
 
@@ -77,7 +77,7 @@ async function assertInvoiceLinesBillable(dealer, lines) {
   const files = await findDealerInvoiceFilesByIds(dealer, ids, { requireUnpaid: true });
   if (files.length !== lines.length) {
     throw ApiError.badRequest(
-      'One or more files are invalid, already invoiced or paid, excluded, or belong to another dealer'
+      'One or more files are invalid, still marked Paid, excluded, or belong to another dealer'
     );
   }
   for (const file of files) {
@@ -86,6 +86,40 @@ async function assertInvoiceLinesBillable(dealer, lines) {
       throw ApiError.badRequest('Cannot invoice files with zero bill amount');
     }
   }
+}
+
+function trim(value) {
+  return String(value || '').trim();
+}
+
+/** Snapshot RTO + expense split from live file rows (source of truth on create). */
+async function enrichInvoiceLinesFromFiles(dealer, lines) {
+  const ids = lines.map((line) => String(line.fileId));
+  const files = await findDealerInvoiceFilesByIds(dealer, ids, { requireUnpaid: true });
+  if (files.length !== lines.length) {
+    throw ApiError.badRequest(
+      'One or more files are invalid, still marked Paid, excluded, or belong to another dealer'
+    );
+  }
+  const byId = new Map(files.map((f) => [String(f._id), f]));
+  return lines.map((line) => {
+    const file = byId.get(String(line.fileId));
+    const split = splitFileExpensesForInvoice(file.expenses, file.totalBill);
+    if (split.amount <= 0) {
+      throw ApiError.badRequest('Cannot invoice files with zero bill amount');
+    }
+    return {
+      fileId: line.fileId,
+      vehicleNo: trim(file.vehicleNo),
+      vehicleModel: trim(file.vehicleModel),
+      rtoName: trim(file.rtoName),
+      workType: trim(file.workType),
+      fileNumber: trim(file.fileNumber),
+      extraAmount: split.extraAmount,
+      dealAmount: split.dealAmount,
+      amount: split.amount,
+    };
+  });
 }
 
 function appendRtoNameFilter(parts, rtoName) {
@@ -234,12 +268,11 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
 
   parts.push(buildDealerBillingFileScope(dealer));
 
-  const invoicedFileIds = await DealerInvoice.distinct('lines.fileId', { dealerId: dealer._id });
-  if (invoicedFileIds.length) {
-    parts.push({ _id: { $nin: invoicedFileIds } });
-  }
-
-  /** Invoice only includes files still awaiting payment (not paper return). */
+  /**
+   * Billable when not marked paid on the file record. Invoicing sets paymentDone;
+   * admins can set Unpaid again in File Records to allow a new invoice line-up.
+   * (Past invoices in history are unchanged.)
+   */
   parts.push({ paymentDone: { $ne: true } });
   parts.push({ status: { $ne: 'paper_return' } });
 
@@ -247,13 +280,7 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
 
   const query = combineQueryParts(parts);
 
-  let rows = await File.find(query).sort(FILE_LIST_SORT);
-  rows = rows.filter(
-    (f) => !f.paymentDone && String(f.status || '') !== 'paper_return'
-  );
-  if (hasActiveInvoiceFilters(filters)) {
-    rows = rows.filter((f) => matchesInvoiceFilters(f, filters, user));
-  }
+  const rows = await File.find(query).sort(FILE_LIST_SORT);
 
   return {
     files: rows.map((f) => toPublicFile(f, user)),
@@ -261,7 +288,9 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
   };
 }
 
-async function markDealerFilesInvoiced(user, dealerId, rawFileIds = []) {
+async function markDealerFilesInvoiced(user, dealerId, rawFileIds = [], options = {}) {
+  const { requireAllMarked = false } = options;
+
   if (user?.role !== 'superadmin') {
     throw ApiError.forbidden('Only an admin can mark dealer invoice payments');
   }
@@ -298,7 +327,8 @@ async function markDealerFilesInvoiced(user, dealerId, rawFileIds = []) {
   }
 
   const displayName = normalizeDealerDisplayName(dealer.name);
-  const idsToMark = [];
+  const objectIds = fileIds.map((id) => toObjectId(id)).filter(Boolean);
+
   for (const file of files) {
     const bill = Number(file.totalBill) || 0;
     if (bill <= 0) {
@@ -309,11 +339,23 @@ async function markDealerFilesInvoiced(user, dealerId, rawFileIds = []) {
       file.dealerName = displayName;
       await file.save();
     }
-    if (!file.paymentDone) {
-      idsToMark.push(file._id);
-    }
   }
 
+  if (requireAllMarked) {
+    const updateResult = await File.updateMany(
+      { _id: { $in: objectIds }, paymentDone: { $ne: true } },
+      { $set: { paymentDone: true, dealerId: dealer._id, dealerName: displayName } }
+    );
+    if (updateResult.modifiedCount !== fileIds.length) {
+      throw ApiError.conflict(
+        'One or more files were already marked paid or invoiced. Refresh and try again.',
+        'FILES_ALREADY_INVOICED'
+      );
+    }
+    return { updated: updateResult.modifiedCount, fileIds };
+  }
+
+  const idsToMark = files.filter((f) => !f.paymentDone).map((f) => f._id);
   if (idsToMark.length) {
     await File.updateMany(
       { _id: { $in: idsToMark } },
@@ -328,4 +370,5 @@ module.exports = {
   listFilesForDealerInvoice,
   markDealerFilesInvoiced,
   assertInvoiceLinesBillable,
+  enrichInvoiceLinesFromFiles,
 };

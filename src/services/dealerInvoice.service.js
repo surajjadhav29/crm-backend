@@ -1,3 +1,4 @@
+const File = require('../models/File');
 const Dealer = require('../models/Dealer');
 const DealerInvoice = require('../models/DealerInvoice');
 const SequenceCounter = require('../models/SequenceCounter');
@@ -7,6 +8,7 @@ const { isValidObjectId, toObjectId } = require('../utils/objectId');
 const {
   markDealerFilesInvoiced,
   assertInvoiceLinesBillable,
+  enrichInvoiceLinesFromFiles,
 } = require('./dealerInvoiceFiles.service');
 const {
   sequenceCounterKeyForDate,
@@ -87,10 +89,18 @@ async function reserveNextBillNumber(at = new Date()) {
   }
   const billNumber = formatDealerBillNumber(updated.seq, at);
   const parsed = parseDealerBillNumber(billNumber);
+  let invoiceFy = '';
+  if (parsed?.year && parsed?.month) {
+    invoiceFy = `${parsed.day || ''}${parsed.month}${parsed.year}`;
+  } else if (parsed?.month) {
+    invoiceFy = `${parsed.day || ''}${parsed.month}`;
+  } else if (parsed?.fy) {
+    invoiceFy = parsed.fy;
+  }
   return {
     billNumber,
     invoiceSequence: updated.seq,
-    invoiceFy: parsed?.month ? `${parsed.day || ''}${parsed.month}` : '',
+    invoiceFy,
   };
 }
 
@@ -249,25 +259,14 @@ async function createInvoice(user, dealerId, body = {}) {
 
   const generatedAt = body.generatedAt ? new Date(body.generatedAt) : new Date();
 
-  let billNumber = trim(body.billNumber);
-  let invoiceSequence;
-  let invoiceFy = '';
-  if (billNumber) {
-    const existing = await DealerInvoice.findOne({ billNumber });
-    if (existing) throw ApiError.conflict('An invoice with this number already exists');
-    const parsed = parseDealerBillNumber(billNumber);
-    if (parsed?.sequence) invoiceSequence = parsed.sequence;
-    if (parsed?.month) invoiceFy = `${parsed.day || ''}${parsed.month}`;
-    else if (parsed?.fy) invoiceFy = parsed.fy;
-  } else {
-    const allocated = await reserveNextBillNumber(generatedAt);
-    billNumber = allocated.billNumber;
-    invoiceSequence = allocated.invoiceSequence;
-    invoiceFy = allocated.invoiceFy;
-  }
+  const allocated = await reserveNextBillNumber(generatedAt);
+  const billNumber = allocated.billNumber;
+  const invoiceSequence = allocated.invoiceSequence;
+  const invoiceFy = allocated.invoiceFy;
 
-  const lines = normalizeLines(body.lines);
-  await assertInvoiceLinesBillable(dealer, lines);
+  const draftLines = normalizeLines(body.lines);
+  await assertInvoiceLinesBillable(dealer, draftLines);
+  const lines = await enrichInvoiceLinesFromFiles(dealer, draftLines);
 
   const totalAmount = lines.reduce((sum, line) => sum + line.amount, 0);
   const receivedAmount = parseMoney(body.receivedAmount);
@@ -275,26 +274,32 @@ async function createInvoice(user, dealerId, body = {}) {
     throw ApiError.badRequest('receivedAmount cannot exceed invoice total');
   }
 
-  let invoice = await DealerInvoice.create({
-    dealerId: dealer._id,
-    billNumber,
-    invoiceSequence,
-    invoiceFy,
-    generatedAt,
-    dealerSnapshot: dealerSnapshotFrom(dealer),
-    lines,
-    totalAmount,
-    receivedAmount,
-    createdBy: user._id,
-  });
+  const lineFileIds = lines.map((line) => String(line.fileId));
+  await markDealerFilesInvoiced(user, dealer._id, lineFileIds, { requireAllMarked: true });
 
+  let invoice;
   try {
-    invoice = await markInvoiceLineFilesPaid(user, dealer._id, invoice);
-  } catch {
-    // Keep invoice in history even if file payment flags fail (admin can run sync-legacy-files).
-    invoice.filesMarkedPaid = false;
-    await invoice.save();
+    invoice = await DealerInvoice.create({
+      dealerId: dealer._id,
+      billNumber,
+      invoiceSequence,
+      invoiceFy,
+      generatedAt,
+      dealerSnapshot: dealerSnapshotFrom(dealer),
+      lines,
+      totalAmount,
+      receivedAmount,
+      createdBy: user._id,
+      filesMarkedPaid: true,
+    });
+  } catch (err) {
+    const objectIds = lineFileIds.map((id) => toObjectId(id)).filter(Boolean);
+    if (objectIds.length) {
+      await File.updateMany({ _id: { $in: objectIds } }, { $set: { paymentDone: false } });
+    }
+    throw err;
   }
+
   return invoice.toJSON();
 }
 
@@ -324,7 +329,7 @@ async function updateInvoiceReceived(user, dealerId, invoiceId, body = {}) {
 
   invoice.receivedAmount = receivedAmount;
   await invoice.save();
-  await markInvoiceLineFilesPaid(user, dealerId, invoice);
+  // Do not set file paymentDone here — admins may mark files Unpaid to re-bill on a new invoice.
   return invoice.toJSON();
 }
 

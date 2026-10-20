@@ -20,4 +20,9 @@ async function remove(req, res) {
   return res.status(200).json({ success: true });
 }
 
-module.exports = { list, create, update, remove };
+async function fileCount(req, res) {
+  const count = await userService.countAssignedFiles(req.params.id);
+  return res.status(200).json({ count });
+}
+
+module.exports = { list, create, update, remove, fileCount };

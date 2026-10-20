@@ -100,6 +100,13 @@ async function updateUser(id, { fullName, email, role, password } = {}) {
   return user.toJSON();
 }
 
+async function countAssignedFiles(userId) {
+  if (!userId) return 0;
+  const { isValidObjectId, toObjectId } = require('../utils/objectId');
+  if (!isValidObjectId(userId)) return 0;
+  return File.countDocuments({ createdBy: toObjectId(userId) });
+}
+
 async function deleteUser(currentUser, id) {
   if (id === currentUser._id.toString()) {
     throw ApiError.badRequest('You cannot delete your own account');
@@ -130,4 +137,4 @@ async function deleteUser(currentUser, id) {
   await user.deleteOne();
 }
 
-module.exports = { listUsers, createUser, updateUser, deleteUser };
+module.exports = { listUsers, createUser, updateUser, deleteUser, countAssignedFiles };

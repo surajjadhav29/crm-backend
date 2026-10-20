@@ -17,9 +17,18 @@ function monthPadded(date = new Date()) {
   return String(normalizeDate(date).getMonth() + 1).padStart(2, '0');
 }
 
-/** Invoice number base: day + month, e.g. 20 Oct → "2010". */
+function yearSuffixPadded(date = new Date()) {
+  return String(normalizeDate(date).getFullYear()).slice(-2);
+}
+
+/** @deprecated Legacy base without year — e.g. 20 Oct → "2010". */
 function dayMonthInvoiceBase(date = new Date()) {
   return `${dayOfMonthPadded(date)}${monthPadded(date)}`;
+}
+
+/** Invoice number base: DD + MM + YY, e.g. 20 Oct 2026 → "201026". */
+function dayMonthYearInvoiceBase(date = new Date()) {
+  return `${dayOfMonthPadded(date)}${monthPadded(date)}${yearSuffixPadded(date)}`;
 }
 
 function calendarDateKey(date = new Date()) {
@@ -34,12 +43,40 @@ function sequenceCounterKeyForDate(date = new Date()) {
   return `${DEALER_INVOICE_DAY_COUNTER_PREFIX}${calendarDateKey(date)}`;
 }
 
-/** First invoice on a day → DDMM; further same day → DDMM-2, DDMM-3, … */
-function formatDealerBillNumber(dayIndex, date = new Date()) {
-  const base = dayMonthInvoiceBase(date);
-  const index = Math.max(1, Number(dayIndex) || 1);
-  if (index <= 1) return base;
-  return `${base}-${index}`;
+function parseDayMonthYearSuffix(billNumber) {
+  const s = String(billNumber || '').trim();
+  const withSuffix = /^(\d{6})-(\d+)$/.exec(s);
+  if (withSuffix) {
+    const base = withSuffix[1];
+    const day = parseInt(base.slice(0, 2), 10);
+    const month = parseInt(base.slice(2, 4), 10);
+    const yy = base.slice(4, 6);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return {
+        base,
+        dayIndex: parseInt(withSuffix[2], 10),
+        dayPart: base.slice(0, 2),
+        monthPart: base.slice(2, 4),
+        yearPart: yy,
+      };
+    }
+  }
+  if (/^\d{6}$/.test(s)) {
+    const base = s;
+    const day = parseInt(base.slice(0, 2), 10);
+    const month = parseInt(base.slice(2, 4), 10);
+    const yy = base.slice(4, 6);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return {
+        base,
+        dayIndex: 1,
+        dayPart: base.slice(0, 2),
+        monthPart: base.slice(2, 4),
+        yearPart: yy,
+      };
+    }
+  }
+  return null;
 }
 
 function parseDayMonthSuffix(billNumber) {
@@ -55,6 +92,7 @@ function parseDayMonthSuffix(billNumber) {
         dayIndex: parseInt(withSuffix[2], 10),
         dayPart: base.slice(0, 2),
         monthPart: base.slice(2, 4),
+        yearPart: null,
       };
     }
   }
@@ -62,17 +100,43 @@ function parseDayMonthSuffix(billNumber) {
     const day = parseInt(s.slice(0, 2), 10);
     const month = parseInt(s.slice(2, 4), 10);
     if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-      return { base: s, dayIndex: 1, dayPart: s.slice(0, 2), monthPart: s.slice(2, 4) };
+      return {
+        base: s,
+        dayIndex: 1,
+        dayPart: s.slice(0, 2),
+        monthPart: s.slice(2, 4),
+        yearPart: null,
+      };
     }
   }
   return null;
 }
 
+/** First invoice on a day → DDMMYY; further same day → DDMMYY-2, DDMMYY-3, … */
+function formatDealerBillNumber(dayIndex, date = new Date()) {
+  const base = dayMonthYearInvoiceBase(date);
+  const index = Math.max(1, Number(dayIndex) || 1);
+  if (index <= 1) return base;
+  return `${base}-${index}`;
+}
+
 /**
- * Parse bill numbers — DDMM / DDMM-N, legacy serial+day, FY, plain numeric.
+ * Parse bill numbers — DDMMYY / DDMMYY-N, legacy DDMM / DDMM-N, FY, plain numeric.
  */
 function parseDealerBillNumber(billNumber) {
   const s = String(billNumber || '').trim();
+  const ddmmyy = parseDayMonthYearSuffix(s);
+  if (ddmmyy) {
+    return {
+      fy: null,
+      sequence: ddmmyy.dayIndex,
+      day: ddmmyy.dayPart,
+      month: ddmmyy.monthPart,
+      year: ddmmyy.yearPart,
+      base: ddmmyy.base,
+    };
+  }
+
   const ddmm = parseDayMonthSuffix(s);
   if (ddmm) {
     return {
@@ -80,13 +144,14 @@ function parseDealerBillNumber(billNumber) {
       sequence: ddmm.dayIndex,
       day: ddmm.dayPart,
       month: ddmm.monthPart,
+      year: ddmm.yearPart,
       base: ddmm.base,
     };
   }
 
   const modernFy = /^(\d{2})-(\d+)$/.exec(s);
   if (modernFy) {
-    return { fy: modernFy[1], sequence: parseInt(modernFy[2], 10), day: null, month: null };
+    return { fy: modernFy[1], sequence: parseInt(modernFy[2], 10), day: null, month: null, year: null };
   }
 
   if (/^\d+$/.test(s)) {
@@ -95,10 +160,10 @@ function parseDealerBillNumber(billNumber) {
       const day = parseInt(dayPart, 10);
       const seqPart = s.slice(0, -2);
       if (seqPart.length >= 1 && day >= 1 && day <= 31) {
-        return { fy: null, sequence: parseInt(seqPart, 10), day: dayPart, month: null };
+        return { fy: null, sequence: parseInt(seqPart, 10), day: dayPart, month: null, year: null };
       }
     }
-    return { fy: null, sequence: parseInt(s, 10), day: null, month: null };
+    return { fy: null, sequence: parseInt(s, 10), day: null, month: null, year: null };
   }
 
   const tail = s.split('-').pop();
@@ -109,7 +174,7 @@ function parseDealerBillNumber(billNumber) {
 }
 
 function billNumberRegexForDayMonth() {
-  return /^\d{4}(-\d+)?$/;
+  return /^\d{6}(-\d+)?$/;
 }
 
 function startOfLocalDay(date) {
@@ -124,7 +189,7 @@ function startOfNextLocalDay(date) {
 }
 
 function billNumberPatternForDate(date) {
-  const base = escapeRegex(dayMonthInvoiceBase(date));
+  const base = escapeRegex(dayMonthYearInvoiceBase(date));
   return new RegExp(`^${base}(-\\d+)?$`);
 }
 
@@ -152,6 +217,7 @@ function billNumberRegexForFy(fySuffix) {
 
 module.exports = {
   dayMonthInvoiceBase,
+  dayMonthYearInvoiceBase,
   calendarDateKey,
   sequenceCounterKeyForDate,
   formatDealerBillNumber,
@@ -162,6 +228,7 @@ module.exports = {
   startOfNextLocalDay,
   dayOfMonthPadded,
   monthPadded,
+  yearSuffixPadded,
   sequenceCounterKey,
   sequenceCounterKeyForFy,
   indianFinancialYearStartYear,

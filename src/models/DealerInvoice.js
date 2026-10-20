@@ -5,8 +5,11 @@ const invoiceLineSchema = new mongoose.Schema(
     fileId: { type: mongoose.Schema.Types.ObjectId, ref: 'File', required: true },
     vehicleNo: { type: String, default: '' },
     vehicleModel: { type: String, default: '' },
+    rtoName: { type: String, default: '' },
     workType: { type: String, default: '' },
     fileNumber: { type: String, default: '' },
+    extraAmount: { type: Number, min: 0 },
+    dealAmount: { type: Number, min: 0 },
     amount: { type: Number, required: true, min: 0 },
   },
   { _id: false }
