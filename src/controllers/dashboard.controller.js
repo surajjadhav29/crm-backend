@@ -16,10 +16,11 @@ async function stats(req, res) {
 }
 
 async function analytics(req, res) {
-  const period = req.query.period || 'month';
   const result = await dashboardService.getAnalytics(req.user, {
     filterUserId: req.query.userId,
-    period,
+    dateFrom: req.query.dateFrom,
+    dateTo: req.query.dateTo,
+    period: req.query.period,
   });
   return res.status(200).json(result);
 }

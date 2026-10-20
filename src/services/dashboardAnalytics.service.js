@@ -143,6 +143,79 @@ function buildChartBuckets(period, files, now = new Date()) {
   return buckets;
 }
 
+function localDateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseDateInput(value, endOfDay = false) {
+  if (!value || typeof value !== 'string') return null;
+  const parts = value.trim().slice(0, 10).split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+  if (Number.isNaN(d.getTime())) return null;
+  if (endOfDay) d.setHours(23, 59, 59, 999);
+  else d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function resolveChartDateRange(dateFrom, dateTo, now = new Date()) {
+  let to = parseDateInput(dateTo, true);
+  if (!to) {
+    to = new Date(now);
+    to.setHours(23, 59, 59, 999);
+  }
+  let from = parseDateInput(dateFrom, false);
+  if (!from) {
+    from = new Date(to);
+    from.setDate(from.getDate() - 30);
+    from.setHours(0, 0, 0, 0);
+  }
+  if (from.getTime() > to.getTime()) {
+    const swap = from;
+    from = new Date(to);
+    from.setHours(0, 0, 0, 0);
+    to = new Date(swap);
+    to.setHours(23, 59, 59, 999);
+  }
+  return { chartFrom: from, chartTo: to };
+}
+
+function buildChartBucketsForRange(chartFrom, chartTo, files) {
+  const buckets = [];
+  const cursor = new Date(chartFrom);
+  cursor.setHours(0, 0, 0, 0);
+  const end = new Date(chartTo);
+  end.setHours(0, 0, 0, 0);
+
+  while (cursor.getTime() <= end.getTime()) {
+    const key = localDateKey(cursor);
+    buckets.push({
+      label: cursor.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+      sub: cursor.toLocaleDateString('en-IN', { weekday: 'short' }),
+      key,
+      records: 0,
+      payment: 0,
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  files.forEach((f) => {
+    const parsed = parseFileDate(f);
+    if (!parsed) return;
+    const key = localDateKey(parsed);
+    const b = buckets.find((x) => x.key === key);
+    if (b) {
+      b.records += 1;
+      b.payment += Number(f.totalBill) || 0;
+    }
+  });
+
+  return buckets;
+}
+
 function chartRangeQuery(period, now = new Date()) {
   if (period === 'week') {
     const from = new Date(now);
@@ -195,8 +268,9 @@ function formatWorkTypeBreakdown(rows) {
     .sort((a, b) => b.value - a.value);
 }
 
-async function getAnalytics(user, { filterUserId, period = 'month' } = {}) {
+async function getAnalytics(user, { filterUserId, dateFrom, dateTo, period = 'month' } = {}) {
   const safePeriod = ['week', 'month', 'year'].includes(period) ? period : 'month';
+  const useDateRange = Boolean(dateFrom || dateTo);
   const baseMatch = buildListQuery(user, { type: 'all_records', filterUserId });
 
   const [byStatus, byWorkType] = await Promise.all([
@@ -207,15 +281,23 @@ async function getAnalytics(user, { filterUserId, period = 'month' } = {}) {
     ]),
   ]);
 
-  const { chartFrom, chartTo } = chartRangeQuery(safePeriod);
+  const { chartFrom, chartTo } = useDateRange
+    ? resolveChartDateRange(dateFrom, dateTo)
+    : chartRangeQuery(safePeriod);
   const chartRows = await File.find(baseMatch)
     .select('date createdAt totalBill')
     .lean();
   const chartFiles = chartRows.filter((f) => fileInChartRange(f, chartFrom, chartTo));
 
+  const chart = useDateRange
+    ? buildChartBucketsForRange(chartFrom, chartTo, chartFiles)
+    : buildChartBuckets(safePeriod, chartFiles);
+
   return {
-    period: safePeriod,
-    chart: buildChartBuckets(safePeriod, chartFiles),
+    period: useDateRange ? undefined : safePeriod,
+    dateFrom: useDateRange ? localDateKey(chartFrom) : undefined,
+    dateTo: useDateRange ? localDateKey(chartTo) : undefined,
+    chart,
     statusBreakdown: formatStatusBreakdown(byStatus),
     workTypeBreakdown: formatWorkTypeBreakdown(byWorkType),
   };
