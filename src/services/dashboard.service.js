@@ -17,4 +17,8 @@ async function getLists(user, opts = {}) {
   return dashboardAnalytics.getLists(user, opts);
 }
 
-module.exports = { getStats, getAnalytics, getLists };
+async function getObjectionFollowUps(user, opts = {}) {
+  return dashboardAnalytics.listObjectionFollowUpsForUser(user, opts);
+}
+
+module.exports = { getStats, getAnalytics, getLists, getObjectionFollowUps };

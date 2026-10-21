@@ -4,7 +4,12 @@ const { todayDateString } = require('../utils/date');
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const { isObjectionOverdue, sortOverdueObjections } = require('../utils/objectionReminder');
+const ApiError = require('../utils/apiError');
+const {
+  getLatestObjectionReview,
+  isObjectionOverdue,
+  sortOverdueObjections,
+} = require('../utils/objectionReminder');
 
 const OVERDUE_OBJECTION_PAGE_SIZE_DEFAULT = 150;
 const OVERDUE_OBJECTION_PAGE_SIZE_MAX = 150;
@@ -41,6 +46,50 @@ async function listOverdueObjectionsForUser(user, { filterUserId, page = 1, page
     overduePage: pageClamped,
     overduePageSize: safeSize,
     overdueTotalPages: totalPages,
+  };
+}
+
+function sortObjectionFollowUps(files) {
+  return [...files].sort((a, b) => {
+    const aAt = getLatestObjectionReview(a)?.at;
+    const bAt = getLatestObjectionReview(b)?.at;
+    const aTs = aAt ? new Date(aAt).getTime() : 0;
+    const bTs = bAt ? new Date(bAt).getTime() : 0;
+    if (bTs !== aTs) return bTs - aTs;
+    return String(a.fileNumber || '').localeCompare(String(b.fileNumber || ''));
+  });
+}
+
+/** Admin: objection files where staff saved at least one follow-up review. */
+async function listObjectionFollowUpsForUser(user, { filterUserId, page = 1, pageSize } = {}) {
+  if (user.role !== 'superadmin') {
+    throw ApiError.forbidden('Only administrators can view objection follow-ups');
+  }
+
+  const safePage = parseOverduePage(page);
+  const safeSize = parseOverduePageSize(pageSize);
+  const baseMatch = buildListQuery(user, { type: 'all_records', filterUserId });
+
+  const objectionRaw = await File.find({
+    $and: [baseMatch, { status: 'objection' }, { 'objectionReviews.0': { $exists: true } }],
+  }).sort({ lastStatusAt: -1, createdAt: -1 });
+
+  const withReviews = objectionRaw.filter(
+    (f) => Array.isArray(f.objectionReviews) && f.objectionReviews.length > 0
+  );
+  const sorted = sortObjectionFollowUps(withReviews);
+  const total = sorted.length;
+  const totalPages = Math.max(1, Math.ceil(total / safeSize) || 1);
+  const pageClamped = total > 0 ? Math.min(safePage, totalPages) : 1;
+  const skip = (pageClamped - 1) * safeSize;
+  const pageRows = sorted.slice(skip, skip + safeSize);
+
+  return {
+    objectionFollowUps: pageRows.map((f) => toPublicFile(f, user)),
+    followUpTotal: total,
+    followUpPage: pageClamped,
+    followUpPageSize: safeSize,
+    followUpTotalPages: totalPages,
   };
 }
 
@@ -347,4 +396,5 @@ module.exports = {
   getAnalytics,
   getLists,
   listOverdueObjectionsForUser,
+  listObjectionFollowUpsForUser,
 };

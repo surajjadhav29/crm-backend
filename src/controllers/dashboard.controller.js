@@ -34,4 +34,13 @@ async function lists(req, res) {
   return res.status(200).json(result);
 }
 
-module.exports = { stats, analytics, lists };
+async function objectionFollowUps(req, res) {
+  const result = await dashboardService.getObjectionFollowUps(req.user, {
+    filterUserId: req.query.userId,
+    page: req.query.page,
+    pageSize: req.query.pageSize,
+  });
+  return res.status(200).json(result);
+}
+
+module.exports = { stats, analytics, lists, objectionFollowUps };

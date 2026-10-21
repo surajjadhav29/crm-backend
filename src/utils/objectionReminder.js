@@ -39,19 +39,52 @@ function getObjectionSince(file) {
   return null;
 }
 
+function getCalendarDaysBetween(fromDate, toDate = new Date()) {
+  const from = toValidDate(fromDate);
+  if (!from) return null;
+  const fromDay = startOfLocalCalendarDay(from);
+  const toDay = startOfLocalCalendarDay(toDate);
+  const diff = Math.floor((toDay.getTime() - fromDay.getTime()) / 86400000);
+  return diff < 0 ? 0 : diff;
+}
+
 function getObjectionPendingCalendarDays(file, now = new Date()) {
   const since = getObjectionSince(file);
   if (!since) return null;
-  const sinceDay = startOfLocalCalendarDay(since);
-  const nowDay = startOfLocalCalendarDay(now);
-  const diff = Math.floor((nowDay.getTime() - sinceDay.getTime()) / 86400000);
-  return diff < 0 ? 0 : diff;
+  return getCalendarDaysBetween(since, now);
+}
+
+function getObjectionReviews(file) {
+  return Array.isArray(file?.objectionReviews) ? file.objectionReviews : [];
+}
+
+function getLatestObjectionReview(file) {
+  const reviews = getObjectionReviews(file);
+  if (!reviews.length) return null;
+  let latest = null;
+  let latestAt = -Infinity;
+  for (const entry of reviews) {
+    const at = toValidDate(entry?.at);
+    const ts = at ? at.getTime() : Number.NaN;
+    if (!Number.isNaN(ts) && ts >= latestAt) {
+      latestAt = ts;
+      latest = entry;
+    }
+  }
+  return latest;
 }
 
 function isObjectionOverdue(file, now = new Date()) {
   if (String(file?.status || '').toLowerCase() !== 'objection') return false;
-  const days = getObjectionPendingCalendarDays(file, now);
-  return days != null && days >= OBJECTION_REMINDER_DAYS;
+  const objectionDays = getObjectionPendingCalendarDays(file, now);
+  if (objectionDays == null || objectionDays < OBJECTION_REMINDER_DAYS) return false;
+
+  const lastReview = getLatestObjectionReview(file);
+  if (!lastReview) return true;
+
+  const daysSinceReview = getCalendarDaysBetween(lastReview.at, now);
+  if (daysSinceReview == null) return true;
+  return daysSinceReview >= OBJECTION_REMINDER_DAYS;
 }
 
 function sortOverdueObjections(files, now = new Date()) {
@@ -69,6 +102,8 @@ module.exports = {
   OBJECTION_REMINDER_DAYS,
   getObjectionSince,
   getObjectionPendingCalendarDays,
+  getObjectionReviews,
+  getLatestObjectionReview,
   isObjectionOverdue,
   sortOverdueObjections,
 };

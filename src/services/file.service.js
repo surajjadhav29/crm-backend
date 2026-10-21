@@ -915,6 +915,35 @@ async function updateStatus(user, id, { status, remarks } = {}) {
   return toPublicFile(file, user);
 }
 
+async function addObjectionReview(user, id, { reason } = {}) {
+  const file = await getAccessibleFile(id, user);
+  if (String(file.status || '').toLowerCase() !== 'objection') {
+    throw ApiError.badRequest(
+      'Follow-up notes are only allowed while the file is in Objection',
+      'NOT_IN_OBJECTION'
+    );
+  }
+
+  const trimmed = String(reason || '').trim();
+  if (!trimmed) {
+    throw ApiError.badRequest('Reason is required', 'REASON_REQUIRED');
+  }
+
+  if (!Array.isArray(file.objectionReviews)) {
+    file.objectionReviews = [];
+  }
+
+  file.objectionReviews.push({
+    reason: trimmed,
+    at: new Date(),
+    userId: user._id,
+    userName: String(user.fullName || '').trim() || 'User',
+  });
+
+  await file.save();
+  return toPublicFile(file, user);
+}
+
 async function updateExpenses(user, id, body) {
   const file = await getAccessibleFile(id, user);
 
@@ -1080,6 +1109,7 @@ module.exports = {
   createFile,
   updateFile,
   updateStatus,
+  addObjectionReview,
   updateExpenses,
   deleteFile,
   bulkFiles,

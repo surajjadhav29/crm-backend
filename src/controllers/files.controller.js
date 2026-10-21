@@ -76,6 +76,13 @@ async function updateStatus(req, res) {
   return res.status(200).json({ success: true, file });
 }
 
+async function addObjectionReview(req, res) {
+  const file = await fileService.addObjectionReview(req.user, req.params.id, {
+    reason: req.body.reason,
+  });
+  return res.status(200).json({ success: true, file });
+}
+
 async function updateExpenses(req, res) {
   const file = await fileService.updateExpenses(req.user, req.params.id, req.body);
   return res.status(200).json({ success: true, file });
@@ -135,6 +142,7 @@ module.exports = {
   create,
   update,
   updateStatus,
+  addObjectionReview,
   updateExpenses,
   remove,
   bulk,

@@ -47,6 +47,16 @@ const paperLocationHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const objectionReviewSchema = new mongoose.Schema(
+  {
+    reason: { type: String, required: true, trim: true },
+    at: { type: Date, default: Date.now },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    userName: { type: String, default: '' },
+  },
+  { _id: false }
+);
+
 const fileSchema = new mongoose.Schema(
   {
     fileNumber: { type: String, required: true, unique: true },
@@ -83,6 +93,8 @@ const fileSchema = new mongoose.Schema(
     paymentDone: { type: Boolean, default: false },
     expenses: { type: expensesSchema, default: () => ({}) },
     statusHistory: { type: [statusHistorySchema], default: [] },
+    /** Staff/admin follow-up notes while file stays in Objection (reminder snooze). */
+    objectionReviews: { type: [objectionReviewSchema], default: [] },
     /** Denormalized from latest statusHistory.at — for fast list sort only. */
     lastStatusAt: { type: Date, default: null },
     /**
@@ -130,6 +142,16 @@ const fileSchema = new mongoose.Schema(
           }));
         } else {
           ret.paperLocationHistory = [];
+        }
+        if (Array.isArray(ret.objectionReviews)) {
+          ret.objectionReviews = ret.objectionReviews.map((entry) => ({
+            reason: entry.reason || '',
+            at: entry.at instanceof Date ? entry.at.toISOString() : entry.at,
+            userId: entry.userId ? entry.userId.toString() : '',
+            userName: entry.userName || '',
+          }));
+        } else {
+          ret.objectionReviews = [];
         }
         delete ret._id;
         delete ret.__v;

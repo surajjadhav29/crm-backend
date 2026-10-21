@@ -13,6 +13,7 @@ const {
   create,
   update,
   updateStatus,
+  addObjectionReview,
   updateExpenses,
   remove,
   bulk,
@@ -72,6 +73,7 @@ router.post('/bulk', asyncHandler(bulk));
 router.get('/:id', asyncHandler(getOne));
 router.put('/:id', asyncHandler(update));
 router.put('/:id/status', asyncHandler(updateStatus));
+router.post('/:id/objection-reviews', asyncHandler(addObjectionReview));
 router.put('/:id/expenses', asyncHandler(updateExpenses));
 router.delete('/:id', asyncHandler(remove));
 
