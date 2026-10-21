@@ -216,7 +216,8 @@ function buildListQuery(
 
   const rtoQuery = fieldInQuery('rtoName', rtoName);
   if (rtoQuery) parts.push(rtoQuery);
-  if (workType) parts.push({ workType: exactInsensitive(workType) });
+  const workTypeQuery = fieldInQuery('workType', workType);
+  if (workTypeQuery) parts.push(workTypeQuery);
   const dealerQuery = fieldInQuery('dealerName', dealerName);
   if (dealerQuery) parts.push(dealerQuery);
 
@@ -234,7 +235,7 @@ function buildListQuery(
 // can pass a partial filter object safely.
 function matchesFilters(file, { rtoName, workType, dealerName, date, dateFrom, dateTo, datePreset } = {}) {
   if (!matchesFilterList(file.rtoName, rtoName)) return false;
-  if (workType && file.workType !== workType) return false;
+  if (!matchesFilterList(file.workType, workType)) return false;
   if (!matchesFilterList(file.dealerName, dealerName)) return false;
   return matchesDateFilter(file, { date, datePreset, dateFrom, dateTo });
 }
@@ -338,14 +339,28 @@ function toPublicFile(file, user) {
 /* Data access helpers                                                 */
 /* ------------------------------------------------------------------ */
 
+function splitCsvFilter(value) {
+  return String(value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function buildScopeQuery(user, filterUserId) {
   const query = {};
   if (user.role !== 'superadmin') {
     query.createdBy = user._id;
   } else if (filterUserId) {
-    // Aggregate $match needs a real ObjectId; string ids match 0 docs.
-    const oid = toObjectId(filterUserId);
-    query.createdBy = oid || filterUserId;
+    const ids = splitCsvFilter(filterUserId);
+    if (ids.length === 1) {
+      const oid = toObjectId(ids[0]);
+      query.createdBy = oid || ids[0];
+    } else if (ids.length > 1) {
+      query.$or = ids.map((id) => {
+        const oid = toObjectId(id);
+        return { createdBy: oid || id };
+      });
+    }
   }
   return query;
 }

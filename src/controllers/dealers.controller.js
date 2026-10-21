@@ -1,7 +1,10 @@
 const dealerService = require('../services/dealer.service');
 const dealerInvoiceFilesService = require('../services/dealerInvoiceFiles.service');
 const dealerInvoiceService = require('../services/dealerInvoice.service');
-const { parseDealerInvoiceFiltersFromQuery } = require('../utils/dealerInvoiceFileFilters');
+const {
+  parseDealerInvoiceFiltersFromQuery,
+  parseDealerInvoiceFiltersFromBody,
+} = require('../utils/dealerInvoiceFileFilters');
 
 async function list(_req, res) {
   const dealers = await dealerService.listDealers();
@@ -23,6 +26,16 @@ async function listDealerFiles(req, res) {
     req.user,
     req.params.id,
     parseDealerInvoiceFiltersFromQuery(req.query)
+  );
+  return res.status(200).json(result);
+}
+
+/** Billing file pick — filters and pagination in JSON body. */
+async function searchDealerFiles(req, res) {
+  const result = await dealerInvoiceFilesService.listFilesForDealerInvoice(
+    req.user,
+    req.params.id,
+    parseDealerInvoiceFiltersFromBody(req.body)
   );
   return res.status(200).json(result);
 }
@@ -112,6 +125,7 @@ module.exports = {
   names,
   getOne,
   listDealerFiles,
+  searchDealerFiles,
   create,
   update,
   syncLegacyDealerFiles,

@@ -13,8 +13,9 @@ function trimOrUndef(value) {
 }
 
 function normalizeDealerInvoiceFilters(raw = {}) {
+  const filterUserId = trimOrUndef(raw.filterUserId) || trimOrUndef(raw.userId);
   return {
-    filterUserId: trimOrUndef(raw.filterUserId),
+    filterUserId,
     rtoName: trimOrUndef(raw.rtoName),
     workType: trimOrUndef(raw.workType),
     search: trimOrUndef(raw.search),
@@ -55,7 +56,54 @@ function parseDealerInvoiceFiltersFromQuery(query = {}) {
   };
 }
 
+/** CSV string or string[] → comma-separated filter value for Mongo layer. */
+function joinFilterList(value) {
+  if (value === undefined || value === null) return undefined;
+  if (Array.isArray(value)) {
+    const items = value.map((item) => String(item).trim()).filter(Boolean);
+    return items.length ? items.join(',') : undefined;
+  }
+  return trimOrUndef(value);
+}
+
+function parseBodyFlag(value) {
+  if (value === true || value === 1) return true;
+  return parseTruthyFlag(value);
+}
+
+/** POST /dealers/:id/files — filters in JSON body (arrays supported). */
+function parseDealerInvoiceFiltersFromBody(body = {}) {
+  const userFilter = body.userIds !== undefined ? body.userIds : body.userId;
+  const rtoFilter = body.rtoNames !== undefined ? body.rtoNames : body.rtoName;
+  const workFilter = body.workTypes !== undefined ? body.workTypes : body.workType;
+
+  let fileIdsRaw = body.fileIds;
+  if (Array.isArray(fileIdsRaw)) {
+    fileIdsRaw = fileIdsRaw.map((id) => String(id).trim()).filter(Boolean).join(',');
+  }
+
+  return {
+    ...normalizeDealerInvoiceFilters({
+      filterUserId: joinFilterList(userFilter),
+      rtoName: joinFilterList(rtoFilter),
+      workType: joinFilterList(workFilter),
+      search: trimOrUndef(body.search),
+      date: trimOrUndef(body.date),
+      datePreset: trimOrUndef(body.datePreset),
+      dateFrom: trimOrUndef(body.dateFrom),
+      dateTo: trimOrUndef(body.dateTo),
+      minBill: trimOrUndef(body.minBill),
+      maxBill: trimOrUndef(body.maxBill),
+    }),
+    page: body.page,
+    pageSize: body.pageSize,
+    fileIds: trimOrUndef(fileIdsRaw),
+    billableIdsOnly: parseBodyFlag(body.billableIdsOnly),
+  };
+}
+
 module.exports = {
   normalizeDealerInvoiceFilters,
   parseDealerInvoiceFiltersFromQuery,
+  parseDealerInvoiceFiltersFromBody,
 };

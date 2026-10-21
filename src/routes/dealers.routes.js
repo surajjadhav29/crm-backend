@@ -7,6 +7,7 @@ const {
   names,
   getOne,
   listDealerFiles,
+  searchDealerFiles,
   markInvoiced,
   listBillingInvoices,
   peekNextBillingInvoiceNumber,
@@ -46,6 +47,7 @@ router.get(
   asyncHandler(getDealerBillingInvoice)
 );
 router.get('/:id/files', asyncHandler(listDealerFiles));
+router.post('/:id/files', asyncHandler(searchDealerFiles));
 router.get('/:id', asyncHandler(getOne));
 
 router.post(

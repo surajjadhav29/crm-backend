@@ -127,7 +127,8 @@ async function getDealer(id) {
 
 async function createDealer(user, body = {}) {
   const name = trim(body.name);
-  const email = trim(body.email).toLowerCase();
+  const emailRaw = trim(body.email);
+  const email = emailRaw ? emailRaw.toLowerCase() : '';
   const phone = trim(body.phone);
   const address = trim(body.address);
   const city = trim(body.city);
@@ -135,22 +136,21 @@ async function createDealer(user, body = {}) {
   const zip = trim(body.zip);
   const country = trim(body.country) || 'India';
 
-  if (!name || !email || !phone || !address || !city || !state || !zip) {
-    throw ApiError.badRequest('name, email, phone, address, city, state and zip are required');
+  if (!name || !phone || !address || !city || !state || !zip) {
+    throw ApiError.badRequest('name, phone, address, city, state and zip are required');
   }
 
   await assertUniqueDealerName(name);
 
-  if (await Dealer.findOne({ email })) {
+  if (email && (await Dealer.findOne({ email }))) {
     throw ApiError.conflict('A dealer with this email already exists');
   }
   if (await Dealer.findOne({ phone })) {
     throw ApiError.conflict('A dealer with this phone already exists');
   }
 
-  const dealer = await Dealer.create({
+  const dealerDoc = {
     name,
-    email,
     phone,
     address,
     city,
@@ -158,7 +158,10 @@ async function createDealer(user, body = {}) {
     zip,
     country,
     createdBy: user._id,
-  });
+  };
+  if (email) dealerDoc.email = email;
+
+  const dealer = await Dealer.create(dealerDoc);
 
   await linkLegacyFilesToDealer(dealer);
 
@@ -190,13 +193,18 @@ async function updateDealer(id, { name, email, phone, address, city, state, zip,
     dealer.country = trim(country);
   }
 
-  if (email) {
+  if (email !== undefined) {
     const nextEmail = trim(email).toLowerCase();
-    if (nextEmail !== dealer.email) {
-      if (await Dealer.findOne({ email: nextEmail, _id: { $ne: dealer._id } })) {
-        throw ApiError.conflict('A dealer with this email already exists');
+    const current = dealer.email ? String(dealer.email).toLowerCase() : '';
+    if (nextEmail !== current) {
+      if (nextEmail) {
+        if (await Dealer.findOne({ email: nextEmail, _id: { $ne: dealer._id } })) {
+          throw ApiError.conflict('A dealer with this email already exists');
+        }
+        dealer.email = nextEmail;
+      } else {
+        dealer.email = undefined;
       }
-      dealer.email = nextEmail;
     }
   }
 

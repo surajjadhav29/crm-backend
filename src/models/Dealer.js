@@ -6,7 +6,15 @@ const dealerSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     /** Uppercase, collapsed spaces — unique registry name. */
     nameKey: { type: String, required: true, trim: true, unique: true },
-    email: { type: String, required: true, trim: true, lowercase: true, unique: true },
+    email: {
+      type: String,
+      required: false,
+      trim: true,
+      lowercase: true,
+      sparse: true,
+      unique: true,
+      default: undefined,
+    },
     phone: { type: String, required: true, trim: true, unique: true },
     address: { type: String, required: true, trim: true },
     city: { type: String, required: true, trim: true },
@@ -30,9 +38,12 @@ const dealerSchema = new mongoose.Schema(
   }
 );
 
-dealerSchema.pre('validate', function setNameKey() {
+dealerSchema.pre('validate', function setNameKeyAndNormalizeEmail() {
   if (this.name) {
     this.nameKey = dealerNameKey(this.name);
+  }
+  if (!this.email || !String(this.email).trim()) {
+    this.email = undefined;
   }
 });
 

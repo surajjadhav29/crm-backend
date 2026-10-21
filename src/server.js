@@ -2,6 +2,7 @@ const env = require('./config/env');
 const app = require('./app');
 const { ensureDatabaseConnection } = require('./config/db');
 const File = require('./models/File');
+const Dealer = require('./models/Dealer');
 
 function startServer(currentPort) {
   const server = app.listen(currentPort, () => {
@@ -31,6 +32,11 @@ if (require.main === module) {
         await File.syncIndexes();
       } catch (err) {
         console.warn('File.syncIndexes:', err.message);
+      }
+      try {
+        await Dealer.syncIndexes();
+      } catch (err) {
+        console.warn('Dealer.syncIndexes:', err.message);
       }
       startServer(env.PORT);
     })

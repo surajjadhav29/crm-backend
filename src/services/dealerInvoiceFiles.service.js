@@ -155,16 +155,24 @@ async function enrichInvoiceLinesFromFiles(dealer, lines) {
 
 function appendRtoNameFilter(parts, rtoName) {
   if (!rtoName) return;
-  const names = String(rtoName)
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const names = splitCsvFilter(rtoName);
   if (!names.length) return;
   if (names.length === 1) {
     parts.push({ rtoName: exactInsensitive(names[0]) });
     return;
   }
   parts.push({ $or: names.map((name) => ({ rtoName: exactInsensitive(name) })) });
+}
+
+function appendWorkTypeFilter(parts, workType) {
+  if (!workType) return;
+  const names = splitCsvFilter(workType);
+  if (!names.length) return;
+  if (names.length === 1) {
+    parts.push({ workType: exactInsensitive(names[0]) });
+    return;
+  }
+  parts.push({ $or: names.map((name) => ({ workType: exactInsensitive(name) })) });
 }
 
 function parseBillAmount(value) {
@@ -186,11 +194,14 @@ function appendTotalBillFilter(parts, minBill, maxBill) {
 
 function appendInvoiceFilters(parts, filters) {
   appendRtoNameFilter(parts, filters.rtoName);
-  if (filters.workType) parts.push({ workType: exactInsensitive(filters.workType) });
+  appendWorkTypeFilter(parts, filters.workType);
 
-  const dateQuery =
-    buildDateFilterQuery({ date: filters.date, datePreset: filters.datePreset }) ||
-    buildDateRangeFilterQuery({ dateFrom: filters.dateFrom, dateTo: filters.dateTo });
+  const dateQuery = buildDateFilterQuery({
+    date: filters.date,
+    datePreset: filters.datePreset,
+    dateFrom: filters.dateFrom,
+    dateTo: filters.dateTo,
+  });
   if (dateQuery) parts.push(dateQuery);
 
   const searchQuery = buildSearchQuery(filters.search);
@@ -248,7 +259,8 @@ function matchesInvoiceFilters(file, filters, user) {
   if (user?.role !== 'superadmin') {
     if (String(doc.createdBy) !== String(user._id)) return false;
   } else if (filters.filterUserId) {
-    if (String(doc.createdBy) !== String(filters.filterUserId)) return false;
+    const wanted = splitCsvFilter(filters.filterUserId);
+    if (!wanted.some((id) => String(doc.createdBy) === String(id))) return false;
   }
 
   if (filters.rtoName) {
@@ -258,8 +270,9 @@ function matchesInvoiceFilters(file, filters, user) {
   }
 
   if (filters.workType) {
-    const wanted = String(filters.workType).trim().toLowerCase();
-    if (String(doc.workType || '').trim().toLowerCase() !== wanted) return false;
+    const wanted = splitCsvFilter(filters.workType);
+    const got = String(doc.workType || '').trim().toLowerCase();
+    if (!wanted.some((name) => got === name.toLowerCase())) return false;
   }
 
   const bill = Number(doc.totalBill) || 0;
@@ -279,13 +292,9 @@ function matchesInvoiceFilters(file, filters, user) {
   return true;
 }
 
-function buildDealerInvoiceFileQuery(user, dealer, filters) {
+function buildDealerInvoiceFileBaseParts(user, dealer) {
   const parts = [];
-  const scope = buildScopeQuery(user, filters.filterUserId);
-  if (Object.keys(scope).length) parts.push(scope);
-
   parts.push(buildDealerBillingFileScope(dealer));
-
   /**
    * Billable when not marked paid on the file record. Invoicing sets paymentDone;
    * admins can set Unpaid again in File Records to allow a new invoice line-up.
@@ -293,9 +302,27 @@ function buildDealerInvoiceFileQuery(user, dealer, filters) {
    */
   parts.push({ paymentDone: { $ne: true } });
   parts.push({ status: { $ne: 'paper_return' } });
+  return parts;
+}
+
+function buildDealerInvoiceFileQuery(user, dealer, filters) {
+  const parts = [];
+  const scope = buildScopeQuery(user, filters.filterUserId);
+  if (Object.keys(scope).length) parts.push(scope);
+
+  parts.push(...buildDealerInvoiceFileBaseParts(user, dealer));
 
   appendInvoiceFilters(parts, filters);
 
+  return combineQueryParts(parts);
+}
+
+/** Resolve explicit file ids: dealer + assignee scope only (no RTO/date/search column filters). */
+function buildDealerInvoiceFileResolveQuery(user, dealer, filters) {
+  const parts = [];
+  const scope = buildScopeQuery(user, filters.filterUserId);
+  if (Object.keys(scope).length) parts.push(scope);
+  parts.push(...buildDealerInvoiceFileBaseParts(user, dealer));
   return combineQueryParts(parts);
 }
 
@@ -338,8 +365,9 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
     if (!objectIds.length) {
       return { files: [], total: 0, billableTotal: 0 };
     }
+    const resolveQuery = buildDealerInvoiceFileResolveQuery(user, dealer, filters);
     const rows = await File.find({
-      $and: [query, { _id: { $in: objectIds } }],
+      $and: [resolveQuery, { _id: { $in: objectIds } }],
     })
       .select(BILLING_FILE_LIST_PROJECTION)
       .sort(FILE_LIST_SORT);
