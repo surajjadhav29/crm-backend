@@ -16,6 +16,7 @@ async function create(req, res) {
     name: req.body.name,
     mobile: req.body.mobile,
     rtoName: req.body.rtoName,
+    address: req.body.address,
   });
   return res.status(201).json({ fieldAgent });
 }
@@ -25,6 +26,7 @@ async function update(req, res) {
     name: req.body.name,
     mobile: req.body.mobile,
     rtoName: req.body.rtoName,
+    address: req.body.address,
     isActive: req.body.isActive,
   });
   return res.status(200).json({ fieldAgent });

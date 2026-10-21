@@ -23,6 +23,16 @@ function normalizeMobile(value) {
   return digits.slice(-10);
 }
 
+function normalizeAddress(value) {
+  return String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
 function displayRto(agent) {
   return agentRtoLabel(agent);
 }
@@ -69,7 +79,7 @@ async function getFieldAgent(id) {
   return agent.toJSON();
 }
 
-async function createFieldAgent(user, { name, mobile, rtoName } = {}) {
+async function createFieldAgent(user, { name, mobile, rtoName, address } = {}) {
   const normalizedName = normalizeLabel(name);
   const normalizedMobile = normalizeMobile(mobile);
   const normalizedRto = normalizeRtoName(rtoName);
@@ -99,6 +109,7 @@ async function createFieldAgent(user, { name, mobile, rtoName } = {}) {
     name: normalizedName,
     mobile: normalizedMobile,
     rtoName: normalizedRto,
+    address: normalizeAddress(address),
     district: '',
     isActive: true,
     createdBy: user._id,
@@ -106,7 +117,7 @@ async function createFieldAgent(user, { name, mobile, rtoName } = {}) {
   return agent.toJSON();
 }
 
-async function updateFieldAgent(id, { name, mobile, rtoName, isActive } = {}) {
+async function updateFieldAgent(id, { name, mobile, rtoName, address, isActive } = {}) {
   if (!isValidObjectId(id)) {
     throw ApiError.badRequest('Invalid field agent id');
   }
@@ -137,6 +148,9 @@ async function updateFieldAgent(id, { name, mobile, rtoName, isActive } = {}) {
     }
     agent.rtoName = normalizedRto;
     agent.district = '';
+  }
+  if (address !== undefined) {
+    agent.address = normalizeAddress(address);
   }
   if (isActive !== undefined) {
     agent.isActive = Boolean(isActive);
