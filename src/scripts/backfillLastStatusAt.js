@@ -10,6 +10,7 @@ async function run() {
   await connectDB();
   const col = mongoose.connection.collection('files');
 
+  
   const cursor = col.find({
     $or: [{ lastStatusAt: { $exists: false } }, { lastStatusAt: null }],
   });
