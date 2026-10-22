@@ -4,9 +4,12 @@
   "version": "0.0.0",
   "main": "src/server.js",
   "scripts": {
+    "mongo:start": "powershell -NoProfile -ExecutionPolicy Bypass -File \"../mongodb-local/start-crm-mongodb.ps1\"",
+    "predev": "npm run mongo:start",
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "seed:superadmin": "node src/scripts/seedSuperAdmin.js"
+    "seed:superadmin": "node src/scripts/seedSuperAdmin.js",
+    "seed:dealers-from-files": "node src/scripts/seedDealersFromFiles.js"
   },
   "engines": {
     "node": ">=20.11.1"
