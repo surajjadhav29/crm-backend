@@ -11,7 +11,7 @@ async function list(_req, res) {
   return res.status(200).json({ dealers });
 }
 
-/** Billing New invoice Step 1 — dealers with at least one billable unpaid file. */
+/** Billing New invoice Step 1 — dealers with unpaid files (incl. ₹0 bill). */
 async function listBillingPick(req, res) {
   const dealers = await dealerInvoiceFilesService.listDealersWithBillableFiles(req.user);
   return res.status(200).json({ dealers });

@@ -437,27 +437,27 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
 }
 
 /**
- * Billing Step 1: dealers that have at least one unpaid, non–paper-return file
- * with totalBill > 0 (same rules as the invoice pick list).
+ * Billing Step 1: dealers that have at least one unpaid, non–paper-return file.
+ * Includes ₹0 bill files so the dealer stays visible — expenses can be added
+ * before invoicing. Invoice select-all still requires totalBill > 0.
  */
 async function listDealersWithBillableFiles(user) {
   if (user?.role !== 'superadmin') {
     throw ApiError.forbidden('Only an admin can view billing dealers');
   }
 
-  const billableBase = {
+  const billingEligibleBase = {
     paymentDone: { $ne: true },
     status: { $ne: 'paper_return' },
-    totalBill: { $gt: 0 },
   };
 
   const [linkedDealerIds, orphanDealerNames] = await Promise.all([
     File.distinct('dealerId', {
-      ...billableBase,
+      ...billingEligibleBase,
       dealerId: { $ne: null, $exists: true },
     }),
     File.distinct('dealerName', {
-      ...billableBase,
+      ...billingEligibleBase,
       $or: [{ dealerId: null }, { dealerId: { $exists: false } }],
     }),
   ]);
