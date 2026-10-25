@@ -19,7 +19,6 @@ async function create(req, res) {
     const agent2 = req.body.agent2 || req.body.agents?.[1];
     const result = await fieldAgentService.createRtoOffice(req.user, {
       rtoName: req.body.rtoName,
-      address: req.body.address,
       agent1,
       agent2,
     });
@@ -31,7 +30,6 @@ async function create(req, res) {
     mobile: req.body.mobile,
     description: req.body.description,
     rtoName: req.body.rtoName,
-    address: req.body.address,
   });
   return res.status(201).json({ fieldAgent });
 }
@@ -39,7 +37,6 @@ async function create(req, res) {
 async function updateOffice(req, res) {
   const result = await fieldAgentService.updateRtoOffice(req.user, {
     rtoName: req.body.rtoName,
-    address: req.body.address,
     agent1: req.body.agent1,
     // Explicit null clears Agent 2; undefined means “leave as provided empty object handling”.
     agent2: req.body.agent2 === undefined ? undefined : req.body.agent2,
@@ -62,7 +59,6 @@ async function update(req, res) {
     mobile: req.body.mobile,
     description: req.body.description,
     rtoName: req.body.rtoName,
-    address: req.body.address,
     isActive: req.body.isActive,
   });
   return res.status(200).json({ fieldAgent });

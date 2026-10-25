@@ -24,16 +24,6 @@ function normalizeMobile(value) {
   return digits.slice(-10);
 }
 
-function normalizeAddress(value) {
-  return String(value ?? '')
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-}
-
 function normalizeDescription(value) {
   return String(value ?? '')
     .replace(/\r\n/g, '\n')
@@ -149,7 +139,7 @@ function parseAgentSlot(slot, { required, label }) {
  * Create one RTO office entry: Agent 1 required, Agent 2 optional.
  * Stored as 1–2 agent docs sharing the same RTO (file assignment keeps agent ids).
  */
-async function createRtoOffice(user, { rtoName, address, agent1, agent2 } = {}) {
+async function createRtoOffice(user, { rtoName, agent1, agent2 } = {}) {
   const normalizedRto = normalizeRtoName(rtoName);
   if (!normalizedRto) {
     throw ApiError.badRequest('RTO is required');
@@ -169,7 +159,6 @@ async function createRtoOffice(user, { rtoName, address, agent1, agent2 } = {}) 
     throw ApiError.badRequest('Field Agent 1 and Field Agent 2 must have different names');
   }
 
-  const sharedAddress = normalizeAddress(address);
   const created = [];
 
   const a1 = await FieldAgent.create({
@@ -177,7 +166,7 @@ async function createRtoOffice(user, { rtoName, address, agent1, agent2 } = {}) 
     mobile: first.mobile,
     description: first.description,
     rtoName: normalizedRto,
-    address: sharedAddress,
+    address: '',
     district: '',
     isActive: true,
     createdBy: user._id,
@@ -190,7 +179,7 @@ async function createRtoOffice(user, { rtoName, address, agent1, agent2 } = {}) 
       mobile: second.mobile,
       description: second.description,
       rtoName: normalizedRto,
-      address: sharedAddress,
+      address: '',
       district: '',
       isActive: true,
       createdBy: user._id,
@@ -202,7 +191,6 @@ async function createRtoOffice(user, { rtoName, address, agent1, agent2 } = {}) 
     office: {
       id: a1._id.toString(),
       rtoName: normalizedRto,
-      address: sharedAddress,
       agents: created.map((a) => a.toJSON()),
     },
   };
@@ -214,7 +202,7 @@ async function createRtoOffice(user, { rtoName, address, agent1, agent2 } = {}) 
  */
 async function updateRtoOffice(
   user,
-  { rtoName, address, agent1, agent2, agentIds = [] } = {}
+  { rtoName, agent1, agent2, agentIds = [] } = {}
 ) {
   const normalizedRto = normalizeRtoName(rtoName);
   if (!normalizedRto) {
@@ -248,7 +236,6 @@ async function updateRtoOffice(
     );
   }
 
-  const sharedAddress = normalizeAddress(address);
   const sorted = [...existing].sort(
     (a, b) => new Date(a.createdAt) - new Date(b.createdAt) || String(a.name).localeCompare(b.name)
   );
@@ -258,7 +245,7 @@ async function updateRtoOffice(
   primary.mobile = first.mobile;
   primary.description = first.description;
   primary.rtoName = normalizedRto;
-  primary.address = sharedAddress;
+  primary.address = '';
   primary.district = '';
   await primary.save();
 
@@ -271,7 +258,7 @@ async function updateRtoOffice(
       secondary.mobile = second.mobile;
       secondary.description = second.description;
       secondary.rtoName = normalizedRto;
-      secondary.address = sharedAddress;
+      secondary.address = '';
       secondary.district = '';
       await secondary.save();
       resultAgents.push(secondary);
@@ -281,7 +268,7 @@ async function updateRtoOffice(
         mobile: second.mobile,
         description: second.description,
         rtoName: normalizedRto,
-        address: sharedAddress,
+        address: '',
         district: '',
         isActive: true,
         createdBy: user._id,
@@ -304,7 +291,6 @@ async function updateRtoOffice(
     office: {
       id: primary._id.toString(),
       rtoName: normalizedRto,
-      address: sharedAddress,
       agents: resultAgents.map((a) => a.toJSON()),
     },
   };
@@ -346,15 +332,14 @@ async function deleteRtoOffice({ rtoName, agentIds = [] } = {}) {
 }
 
 /** Legacy single-agent create (kept for compatibility). Prefer createRtoOffice. */
-async function createFieldAgent(user, { name, mobile, description, rtoName, address } = {}) {
+async function createFieldAgent(user, { name, mobile, description, rtoName } = {}) {
   return createRtoOffice(user, {
     rtoName,
-    address,
     agent1: { name, mobile, description },
   }).then((result) => result.office.agents[0]);
 }
 
-async function updateFieldAgent(id, { name, mobile, description, rtoName, address, isActive } = {}) {
+async function updateFieldAgent(id, { name, mobile, description, rtoName, isActive } = {}) {
   if (!isValidObjectId(id)) {
     throw ApiError.badRequest('Invalid field agent id');
   }
@@ -388,9 +373,6 @@ async function updateFieldAgent(id, { name, mobile, description, rtoName, addres
     }
     agent.rtoName = normalizedRto;
     agent.district = '';
-  }
-  if (address !== undefined) {
-    agent.address = normalizeAddress(address);
   }
   if (isActive !== undefined) {
     agent.isActive = Boolean(isActive);
