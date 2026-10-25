@@ -810,7 +810,7 @@ function writeFieldAgentOnFile(file, agent) {
   file.fieldAgentDistrict = '';
 }
 
-/** Map file to the registry agent for its RTO (one agent per office). */
+/** Map file to the registry agent for its RTO (first of up to 2 when none chosen). */
 async function syncFieldAgentFromRto(file) {
   const agent = await pickActiveFieldAgentForRto(file.rtoName);
   writeFieldAgentOnFile(file, agent);

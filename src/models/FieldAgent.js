@@ -8,6 +8,7 @@ const fieldAgentSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
     mobile: { type: String, default: '', trim: true },
+    description: { type: String, default: '', trim: true },
     address: { type: String, default: '', trim: true },
     rtoName: { type: String, default: '', trim: true, uppercase: true },
     /** @deprecated Legacy field — use rtoName. Kept for old records only. */
