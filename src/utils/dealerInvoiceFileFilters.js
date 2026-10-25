@@ -18,6 +18,7 @@ function normalizeDealerInvoiceFilters(raw = {}) {
     filterUserId,
     rtoName: trimOrUndef(raw.rtoName),
     workType: trimOrUndef(raw.workType),
+    status: trimOrUndef(raw.status),
     search: trimOrUndef(raw.search),
     date: trimOrUndef(raw.date),
     datePreset: trimOrUndef(raw.datePreset),
@@ -41,6 +42,7 @@ function parseDealerInvoiceFiltersFromQuery(query = {}) {
       filterUserId: firstQueryValue(query.userId),
       rtoName: firstQueryValue(query.rtoName),
       workType: firstQueryValue(query.workType),
+      status: firstQueryValue(query.status),
       search: firstQueryValue(query.search),
       date: firstQueryValue(query.date),
       datePreset: firstQueryValue(query.datePreset),
@@ -76,6 +78,7 @@ function parseDealerInvoiceFiltersFromBody(body = {}) {
   const userFilter = body.userIds !== undefined ? body.userIds : body.userId;
   const rtoFilter = body.rtoNames !== undefined ? body.rtoNames : body.rtoName;
   const workFilter = body.workTypes !== undefined ? body.workTypes : body.workType;
+  const statusFilter = body.statuses !== undefined ? body.statuses : body.status;
 
   let fileIdsRaw = body.fileIds;
   if (Array.isArray(fileIdsRaw)) {
@@ -87,6 +90,7 @@ function parseDealerInvoiceFiltersFromBody(body = {}) {
       filterUserId: joinFilterList(userFilter),
       rtoName: joinFilterList(rtoFilter),
       workType: joinFilterList(workFilter),
+      status: joinFilterList(statusFilter),
       search: trimOrUndef(body.search),
       date: trimOrUndef(body.date),
       datePreset: trimOrUndef(body.datePreset),

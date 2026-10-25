@@ -4,6 +4,7 @@ const requireRole = require('../middleware/role.middleware');
 const asyncHandler = require('../middleware/asyncHandler');
 const {
   list,
+  listBillingPick,
   names,
   getOne,
   listDealerFiles,
@@ -25,6 +26,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/', asyncHandler(list));
+router.get('/billing-pick', requireRole('superadmin'), asyncHandler(listBillingPick));
 router.get('/names', asyncHandler(names));
 router.get(
   '/invoices/next-number',

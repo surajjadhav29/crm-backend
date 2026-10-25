@@ -11,6 +11,12 @@ async function list(_req, res) {
   return res.status(200).json({ dealers });
 }
 
+/** Billing New invoice Step 1 — dealers with at least one billable unpaid file. */
+async function listBillingPick(req, res) {
+  const dealers = await dealerInvoiceFilesService.listDealersWithBillableFiles(req.user);
+  return res.status(200).json({ dealers });
+}
+
 async function names(_req, res) {
   const dealers = await dealerService.listDealerNames();
   return res.status(200).json({ dealers });
@@ -122,6 +128,7 @@ async function updateDealerBillingInvoiceReceived(req, res) {
 
 module.exports = {
   list,
+  listBillingPick,
   names,
   getOne,
   listDealerFiles,

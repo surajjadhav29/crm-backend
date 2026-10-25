@@ -1,6 +1,9 @@
 /** Business timezone for calendar dates (file.date, hold cutoff, etc.). */
 const BUSINESS_TIMEZONE = 'Asia/Kolkata';
 
+/** IST has no DST — fixed +05:30 for calendar-day ↔ UTC Date bounds. */
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
 /**
  * Today's calendar date in the business timezone as YYYY-MM-DD.
  * Avoids UTC drift near midnight (e.g. 2am IST was saving the previous day).
@@ -40,6 +43,47 @@ function normalizeDatePreset(value) {
   return DATE_PRESETS.has(key) ? key : '';
 }
 
+/**
+ * `created` (default) → file.date / createdAt (existing behaviour).
+ * `status` → when the file entered its current status (lastStatusAt).
+ */
+function normalizeDateBasis(value) {
+  return String(value || '').trim().toLowerCase() === 'status' ? 'status' : 'created';
+}
+
+function addCalendarDays(day, days) {
+  const [y, m, d] = String(day).split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + Number(days || 0));
+  return dt.toISOString().slice(0, 10);
+}
+
+/** Instant of 00:00:00.000 Asia/Kolkata on the given YYYY-MM-DD. */
+function calendarDayStartUtc(day) {
+  const [y, m, d] = String(day).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d) - IST_OFFSET_MS);
+}
+
+/**
+ * Inclusive calendar range on a Date field (IST days).
+ * Returns { $gte, $lt } (end exclusive = start of day after `to`).
+ */
+function buildInstantRangeForCalendarDays(dateFrom, dateTo) {
+  let from = normalizeDateFilter(dateFrom);
+  let to = normalizeDateFilter(dateTo);
+  if (from && to && from > to) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+  // Custom range requires both ends (same rule as File Records / Billing UI).
+  if (!from || !to) return null;
+  return {
+    $gte: calendarDayStartUtc(from),
+    $lt: calendarDayStartUtc(addCalendarDays(to, 1)),
+  };
+}
+
 function buildDateRangeClause(dateFrom, dateTo) {
   let from = normalizeDateFilter(dateFrom);
   let to = normalizeDateFilter(dateTo);
@@ -48,15 +92,60 @@ function buildDateRangeClause(dateFrom, dateTo) {
     from = to;
     to = swap;
   }
-  if (!from && !to) return null;
-  const range = {};
-  if (from) range.$gte = from;
-  if (to) range.$lte = to;
-  return { date: range };
+  // Custom range requires both Start and End — one-sided From/Until ignored.
+  if (!from || !to) return null;
+  return { date: { $gte: from, $lte: to } };
+}
+
+/**
+ * Current-status entry time: prefer lastStatusAt; fall back to createdAt when
+ * lastStatusAt is missing (legacy rows).
+ */
+function buildLastStatusAtClause(instantRange) {
+  if (!instantRange || !Object.keys(instantRange).length) return null;
+  return {
+    $or: [
+      { lastStatusAt: instantRange },
+      {
+        $and: [
+          {
+            $or: [{ lastStatusAt: null }, { lastStatusAt: { $exists: false } }],
+          },
+          { createdAt: instantRange },
+        ],
+      },
+    ],
+  };
+}
+
+/** Mongo query for “entered current status” presets / custom range. */
+function buildStatusDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
+  const range = buildInstantRangeForCalendarDays(dateFrom, dateTo);
+  if (range) return buildLastStatusAtClause(range);
+
+  const preset = normalizeDatePreset(datePreset);
+  if (preset === 'hour') {
+    return buildLastStatusAtClause({ $gte: new Date(Date.now() - 60 * 60 * 1000) });
+  }
+  if (preset === 'today') {
+    return buildLastStatusAtClause(buildInstantRangeForCalendarDays(todayDateString(), todayDateString()));
+  }
+  if (preset === 'yesterday') {
+    const day = dateStringDaysAgo(1);
+    return buildLastStatusAtClause(buildInstantRangeForCalendarDays(day, day));
+  }
+  if (preset === '30d') {
+    return buildLastStatusAtClause(
+      buildInstantRangeForCalendarDays(dateStringDaysAgo(29), todayDateString())
+    );
+  }
+  const day = normalizeDateFilter(date);
+  if (!day) return null;
+  return buildLastStatusAtClause(buildInstantRangeForCalendarDays(day, day));
 }
 
 /** Mongo query fragment for Created date presets / a custom calendar range. */
-function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
+function buildCreatedDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
   const rangeQuery = buildDateRangeClause(dateFrom, dateTo);
   if (rangeQuery) return rangeQuery;
 
@@ -77,13 +166,55 @@ function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo } = {}) {
   return day ? { date: day } : null;
 }
 
+/**
+ * Date filter for File Records list/stats.
+ * Default `dateBasis` = created (unchanged). Pass `status` for lastStatusAt.
+ * Billing / other callers that omit dateBasis keep created behaviour.
+ */
+function buildDateFilterQuery({ date, datePreset, dateFrom, dateTo, dateBasis } = {}) {
+  if (normalizeDateBasis(dateBasis) === 'status') {
+    return buildStatusDateFilterQuery({ date, datePreset, dateFrom, dateTo });
+  }
+  return buildCreatedDateFilterQuery({ date, datePreset, dateFrom, dateTo });
+}
+
 /** Custom created-date range (file.date YYYY-MM-DD) — used by dealer invoice filters. */
 function buildDateRangeFilterQuery({ dateFrom, dateTo } = {}) {
   return buildDateRangeClause(dateFrom, dateTo);
 }
 
-function matchesDateFilter(file, { date, datePreset, dateFrom, dateTo } = {}) {
-  const query = buildDateFilterQuery({ date, datePreset, dateFrom, dateTo });
+function instantInRange(value, range) {
+  if (!range) return true;
+  const t = value ? new Date(value) : null;
+  if (!t || Number.isNaN(t.getTime())) return false;
+  if (range.$gte && t < range.$gte) return false;
+  if (range.$lt && !(t < range.$lt)) return false;
+  if (range.$lte && t > range.$lte) return false;
+  return true;
+}
+
+function matchesStatusDateFilter(file, { date, datePreset, dateFrom, dateTo } = {}) {
+  const query = buildStatusDateFilterQuery({ date, datePreset, dateFrom, dateTo });
+  if (!query) return true;
+  const at = file.lastStatusAt || file.createdAt;
+  if (query.$or) {
+    // Same semantics as buildLastStatusAtClause: use lastStatusAt when set, else createdAt.
+    if (file.lastStatusAt) {
+      const branch = query.$or.find((part) => part.lastStatusAt);
+      return instantInRange(file.lastStatusAt, branch?.lastStatusAt);
+    }
+    const fallback = query.$or.find((part) => part.$and)?.$and?.find((p) => p.createdAt);
+    return instantInRange(file.createdAt, fallback?.createdAt);
+  }
+  if (query.lastStatusAt) return instantInRange(at, query.lastStatusAt);
+  return true;
+}
+
+function matchesDateFilter(file, { date, datePreset, dateFrom, dateTo, dateBasis } = {}) {
+  if (normalizeDateBasis(dateBasis) === 'status') {
+    return matchesStatusDateFilter(file, { date, datePreset, dateFrom, dateTo });
+  }
+  const query = buildCreatedDateFilterQuery({ date, datePreset, dateFrom, dateTo });
   if (!query) return true;
   if (query.createdAt?.$gte) {
     const created = file.createdAt ? new Date(file.createdAt) : null;
@@ -107,6 +238,7 @@ module.exports = {
   dateStringDaysAgo,
   normalizeDateFilter,
   normalizeDatePreset,
+  normalizeDateBasis,
   buildDateFilterQuery,
   buildDateRangeFilterQuery,
   matchesDateFilter,

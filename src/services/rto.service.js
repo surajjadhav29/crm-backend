@@ -3,7 +3,8 @@ const ApiError = require('../utils/apiError');
 const { BASE_RTO_KEYS, rtoKey } = require('../constants/rto.constants');
 
 async function listRtos() {
-  const rtos = await Rto.find().sort({ name: 1 });
+  // Oldest first so newly created RTOs appear at the end of dropdowns.
+  const rtos = await Rto.find().sort({ createdAt: 1, _id: 1 });
   return rtos.map((r) => r.toJSON());
 }
 

@@ -21,7 +21,12 @@ const {
   DEFAULT_PAPER_LOCATION,
 } = require('../constants/file.constants');
 const { normalizeDocuments, normalizeWorkTypeName } = require('../constants/workType.constants');
-const { todayDateString, buildDateFilterQuery, matchesDateFilter } = require('../utils/date');
+const {
+  todayDateString,
+  buildDateFilterQuery,
+  matchesDateFilter,
+  normalizeDateBasis,
+} = require('../utils/date');
 const { rtoMatchKey } = require('../utils/rtoMatch');
 const { pickActiveFieldAgentForRto } = require('./fieldAgent.service');
 
@@ -194,6 +199,18 @@ function matchesFilterList(fileValue, filterValue) {
   return list.some((name) => name.toLowerCase() === current);
 }
 
+/**
+ * Status-entry date filter only on status tabs by default.
+ * All Files list always uses Created date. Tab stats may pass
+ * `allowStatusDateBasis` so badges match status-entry filtering.
+ */
+function resolveListDateBasis(dateBasis, type, { allowStatusDateBasis = false } = {}) {
+  if (!allowStatusDateBasis && (type === 'all_records' || type === 'all')) {
+    return 'created';
+  }
+  return normalizeDateBasis(dateBasis);
+}
+
 function buildListQuery(
   user,
   {
@@ -207,6 +224,8 @@ function buildListQuery(
     dateFrom,
     dateTo,
     datePreset,
+    dateBasis,
+    allowStatusDateBasis = false,
   } = {}
 ) {
   const parts = [buildScopeQuery(user, filterUserId)];
@@ -221,7 +240,13 @@ function buildListQuery(
   const dealerQuery = fieldInQuery('dealerName', dealerName);
   if (dealerQuery) parts.push(dealerQuery);
 
-  const dateQuery = buildDateFilterQuery({ date, datePreset, dateFrom, dateTo });
+  const dateQuery = buildDateFilterQuery({
+    date,
+    datePreset,
+    dateFrom,
+    dateTo,
+    dateBasis: resolveListDateBasis(dateBasis, type, { allowStatusDateBasis }),
+  });
   if (dateQuery) parts.push(dateQuery);
 
   const searchQuery = buildSearchQuery(search);
@@ -233,11 +258,14 @@ function buildListQuery(
 
 // Column filters (exact match). Empty/undefined values are ignored so callers
 // can pass a partial filter object safely.
-function matchesFilters(file, { rtoName, workType, dealerName, date, dateFrom, dateTo, datePreset } = {}) {
+function matchesFilters(
+  file,
+  { rtoName, workType, dealerName, date, dateFrom, dateTo, datePreset, dateBasis } = {}
+) {
   if (!matchesFilterList(file.rtoName, rtoName)) return false;
   if (!matchesFilterList(file.workType, workType)) return false;
   if (!matchesFilterList(file.dealerName, dealerName)) return false;
-  return matchesDateFilter(file, { date, datePreset, dateFrom, dateTo });
+  return matchesDateFilter(file, { date, datePreset, dateFrom, dateTo, dateBasis });
 }
 
 function matchesSearch(file, search) {
@@ -566,6 +594,7 @@ async function listFiles(
     dateFrom,
     dateTo,
     datePreset,
+    dateBasis,
   } = {}
 ) {
   const query = buildListQuery(user, {
@@ -579,6 +608,7 @@ async function listFiles(
     dateFrom,
     dateTo,
     datePreset,
+    dateBasis,
   });
   const MAX_UNPAGINATED_FILES = 10000;
   const [files, total] = await Promise.all([
@@ -607,6 +637,7 @@ async function paginateFiles(
     dateFrom,
     dateTo,
     datePreset,
+    dateBasis,
   } = {}
 ) {
   const safePage = Math.max(1, parseInt(page, 10) || 1);
@@ -622,6 +653,7 @@ async function paginateFiles(
     dateFrom,
     dateTo,
     datePreset,
+    dateBasis,
   });
 
   const [totalCount, rows] = await Promise.all([
@@ -1054,6 +1086,8 @@ async function getStatsFor(user, filterUserIdOrOpts) {
       ? filterUserIdOrOpts
       : { filterUserId: filterUserIdOrOpts };
 
+  // all_records + optional status-entry date so tab badges match list when
+  // dateBasis=status (Created date remains default / All Files behaviour).
   const match = buildListQuery(user, {
     type: 'all_records',
     search: opts.search || '',
@@ -1065,6 +1099,8 @@ async function getStatsFor(user, filterUserIdOrOpts) {
     dateFrom: opts.dateFrom,
     dateTo: opts.dateTo,
     datePreset: opts.datePreset,
+    dateBasis: opts.dateBasis,
+    allowStatusDateBasis: true,
   });
   const [byStatus, billing] = await Promise.all([
     File.aggregate([

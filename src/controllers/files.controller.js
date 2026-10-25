@@ -16,6 +16,7 @@ async function list(req, res) {
     dateFrom: req.query.dateFrom,
     dateTo: req.query.dateTo,
     datePreset: req.query.datePreset,
+    dateBasis: req.query.dateBasis,
   });
   return res.status(200).json(result);
 }
@@ -49,6 +50,7 @@ async function paginatedList(req, res) {
     dateFrom: req.query.dateFrom,
     dateTo: req.query.dateTo,
     datePreset: req.query.datePreset,
+    dateBasis: req.query.dateBasis,
   });
   return res.status(200).json(result);
 }

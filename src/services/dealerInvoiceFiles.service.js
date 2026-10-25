@@ -19,7 +19,7 @@ const {
   matchesSearch,
   buildSearchQuery,
 } = require('./file.service');
-const { dealerNameExactQuery } = require('../utils/dealerNameKey');
+const { dealerNameExactQuery, dealerNameKey } = require('../utils/dealerNameKey');
 const { splitFileExpensesForInvoice } = require('../utils/fileExpenseSplit');
 
 const FILE_LIST_SORT = { lastStatusAt: -1, createdAt: -1 };
@@ -175,6 +175,31 @@ function appendWorkTypeFilter(parts, workType) {
   parts.push({ $or: names.map((name) => ({ workType: exactInsensitive(name) })) });
 }
 
+/** Multi status; "completed" also matches legacy "done". */
+function expandStatusFilterValues(rawStatus) {
+  const names = splitCsvFilter(rawStatus);
+  if (!names.length) return [];
+  const out = new Set();
+  for (const name of names) {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key) continue;
+    out.add(key);
+    if (key === 'completed') out.add('done');
+    if (key === 'done') out.add('completed');
+  }
+  return [...out];
+}
+
+function appendStatusFilter(parts, status) {
+  const values = expandStatusFilterValues(status);
+  if (!values.length) return;
+  if (values.length === 1) {
+    parts.push({ status: values[0] });
+    return;
+  }
+  parts.push({ status: { $in: values } });
+}
+
 function parseBillAmount(value) {
   if (value === undefined || value === null || value === '') return null;
   const n = Number(value);
@@ -195,6 +220,7 @@ function appendTotalBillFilter(parts, minBill, maxBill) {
 function appendInvoiceFilters(parts, filters) {
   appendRtoNameFilter(parts, filters.rtoName);
   appendWorkTypeFilter(parts, filters.workType);
+  appendStatusFilter(parts, filters.status);
 
   const dateQuery = buildDateFilterQuery({
     date: filters.date,
@@ -229,6 +255,7 @@ function hasActiveInvoiceFilters(filters) {
     filters.filterUserId ||
       filters.rtoName ||
       filters.workType ||
+      filters.status ||
       filters.search ||
       filters.date ||
       filters.datePreset ||
@@ -275,13 +302,20 @@ function matchesInvoiceFilters(file, filters, user) {
     if (!wanted.some((name) => got === name.toLowerCase())) return false;
   }
 
+  if (filters.status) {
+    const wanted = expandStatusFilterValues(filters.status);
+    const got = String(doc.status || '').trim().toLowerCase();
+    if (!wanted.includes(got)) return false;
+  }
+
   const bill = Number(doc.totalBill) || 0;
   const min = parseBillAmount(filters.minBill);
   const max = parseBillAmount(filters.maxBill);
   if (min !== null && bill < min) return false;
   if (max !== null && bill > max) return false;
 
-  if (filters.dateFrom || filters.dateTo) {
+  // Custom range only when both ends are present (one-sided ignored — same as UI).
+  if (filters.dateFrom && filters.dateTo) {
     if (!matchesDateRangeFilter(doc, filters.dateFrom, filters.dateTo)) return false;
   } else if (!matchesDateFilter(doc, { date: filters.date, datePreset: filters.datePreset })) {
     return false;
@@ -402,6 +436,49 @@ async function listFilesForDealerInvoice(user, dealerId, rawFilters = {}) {
   };
 }
 
+/**
+ * Billing Step 1: dealers that have at least one unpaid, non–paper-return file
+ * with totalBill > 0 (same rules as the invoice pick list).
+ */
+async function listDealersWithBillableFiles(user) {
+  if (user?.role !== 'superadmin') {
+    throw ApiError.forbidden('Only an admin can view billing dealers');
+  }
+
+  const billableBase = {
+    paymentDone: { $ne: true },
+    status: { $ne: 'paper_return' },
+    totalBill: { $gt: 0 },
+  };
+
+  const [linkedDealerIds, orphanDealerNames] = await Promise.all([
+    File.distinct('dealerId', {
+      ...billableBase,
+      dealerId: { $ne: null, $exists: true },
+    }),
+    File.distinct('dealerName', {
+      ...billableBase,
+      $or: [{ dealerId: null }, { dealerId: { $exists: false } }],
+    }),
+  ]);
+
+  const objectIds = linkedDealerIds.filter((id) => id && isValidObjectId(String(id)));
+  const nameKeys = [
+    ...new Set(orphanDealerNames.map((name) => dealerNameKey(name)).filter(Boolean)),
+  ];
+
+  if (!objectIds.length && !nameKeys.length) {
+    return [];
+  }
+
+  const or = [];
+  if (objectIds.length) or.push({ _id: { $in: objectIds } });
+  if (nameKeys.length) or.push({ nameKey: { $in: nameKeys } });
+
+  const dealers = await Dealer.find({ $or: or }).sort({ name: 1 });
+  return dealers.map((dealer) => dealer.toJSON());
+}
+
 async function markDealerFilesInvoiced(user, dealerId, rawFileIds = [], options = {}) {
   const { requireAllMarked = false } = options;
 
@@ -480,6 +557,7 @@ async function markDealerFilesInvoiced(user, dealerId, rawFileIds = [], options 
 
 module.exports = {
   listFilesForDealerInvoice,
+  listDealersWithBillableFiles,
   markDealerFilesInvoiced,
   assertInvoiceLinesBillable,
   enrichInvoiceLinesFromFiles,
