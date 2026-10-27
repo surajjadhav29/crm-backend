@@ -204,26 +204,51 @@ async function listInvoices(user, { dealerId, page = 1, pageSize = 20, limit, q 
     100
   );
   const safePage = Math.max(Number(page) || 1, 1);
-  const skip = (safePage - 1) * safePageSize;
 
-  const [total, rows] = await Promise.all([
-    DealerInvoice.countDocuments(query),
-    DealerInvoice.find(query).sort({ generatedAt: -1 }).skip(skip).limit(safePageSize),
-  ]);
-
+  const total = await DealerInvoice.countDocuments(query);
   const totalPages = Math.max(1, Math.ceil(total / safePageSize) || 1);
   const pageClamped = Math.min(safePage, totalPages);
+  const skip = (pageClamped - 1) * safePageSize;
 
-  let invoiceRows = rows;
-  if (pageClamped !== safePage && total > 0) {
-    invoiceRows = await DealerInvoice.find(query)
-      .sort({ generatedAt: -1 })
-      .skip((pageClamped - 1) * safePageSize)
-      .limit(safePageSize);
-  }
+  // Open (unpaid) → Partial → Paid; within each group newest first (not date-first overall).
+  const docs = await DealerInvoice.aggregate([
+    { $match: query },
+    {
+      $addFields: {
+        _balance: {
+          $max: [
+            0,
+            {
+              $subtract: [
+                { $ifNull: ['$totalAmount', 0] },
+                { $ifNull: ['$receivedAmount', 0] },
+              ],
+            },
+          ],
+        },
+      },
+    },
+    {
+      $addFields: {
+        _statusRank: {
+          $switch: {
+            branches: [
+              { case: { $lte: ['$_balance', 0] }, then: 2 },
+              { case: { $gt: [{ $ifNull: ['$receivedAmount', 0] }, 0] }, then: 1 },
+            ],
+            default: 0,
+          },
+        },
+      },
+    },
+    { $sort: { _statusRank: 1, generatedAt: -1 } },
+    { $skip: skip },
+    { $limit: safePageSize },
+    { $project: { _balance: 0, _statusRank: 0 } },
+  ]);
 
   return {
-    invoices: invoiceRows.map((row) => row.toJSON()),
+    invoices: docs.map((doc) => DealerInvoice.hydrate(doc).toJSON()),
     total,
     page: pageClamped,
     pageSize: safePageSize,
