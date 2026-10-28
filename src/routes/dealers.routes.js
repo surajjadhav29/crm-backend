@@ -16,6 +16,7 @@ const {
   getDealerBillingInvoice,
   createDealerBillingInvoice,
   updateDealerBillingInvoiceReceived,
+  reopenDealerBillingInvoiceFiles,
   create,
   update,
   syncLegacyDealerFiles,
@@ -61,6 +62,11 @@ router.patch(
   '/:dealerId/invoices/:invoiceId',
   requireRole('superadmin'),
   asyncHandler(updateDealerBillingInvoiceReceived)
+);
+router.post(
+  '/:dealerId/invoices/:invoiceId/reopen-files',
+  requireRole('superadmin'),
+  asyncHandler(reopenDealerBillingInvoiceFiles)
 );
 router.post('/:id/mark-invoiced', requireRole('superadmin'), asyncHandler(markInvoiced));
 router.post(

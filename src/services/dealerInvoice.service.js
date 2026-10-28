@@ -336,6 +336,11 @@ async function createInvoice(user, dealerId, body = {}) {
   return invoice.toJSON();
 }
 
+/**
+ * Update received amount and/or existing line Extra/Deal on the same invoice.
+ * Line amounts are a snapshot only — File expenses/totalBill are updated by the
+ * File Expenses API (Add Expenses popup), not collapsed here.
+ */
 async function updateInvoiceReceived(user, dealerId, invoiceId, body = {}) {
   if (user?.role !== 'superadmin') {
     throw ApiError.forbidden('Only an admin can update billing invoices');
@@ -350,20 +355,140 @@ async function updateInvoiceReceived(user, dealerId, invoiceId, body = {}) {
   });
   if (!invoice) throw ApiError.notFound('Invoice not found');
 
-  if (body.receivedAmount === undefined) {
-    throw ApiError.badRequest('receivedAmount is required');
+  const hasLines = Array.isArray(body.lines);
+  const hasReceived = body.receivedAmount !== undefined;
+
+  if (!hasLines && !hasReceived) {
+    throw ApiError.badRequest('receivedAmount or lines is required');
   }
 
-  const receivedAmount = parseMoney(body.receivedAmount);
+  if (hasLines) {
+    if (!body.lines.length) {
+      throw ApiError.badRequest('lines cannot be empty');
+    }
+
+    const byFileId = new Map(
+      (invoice.lines || []).map((line) => [String(line.fileId), line])
+    );
+    const seen = new Set();
+    const nextLines = [];
+
+    for (const raw of body.lines) {
+      const fileId = trim(raw.fileId);
+      if (!isValidObjectId(fileId) || !byFileId.has(fileId)) {
+        throw ApiError.badRequest('Each line must reference a file already on this invoice');
+      }
+      if (seen.has(fileId)) {
+        throw ApiError.badRequest('Duplicate file id in lines');
+      }
+      seen.add(fileId);
+
+      const existing = byFileId.get(fileId);
+      const extraAmount = parseMoney(raw.extraAmount);
+      const dealAmount = parseMoney(raw.dealAmount);
+      const amount = extraAmount + dealAmount;
+      if (amount <= 0) {
+        throw ApiError.badRequest('Each invoice line must have Extra + Deal greater than zero');
+      }
+
+      nextLines.push({
+        fileId: existing.fileId,
+        vehicleNo: existing.vehicleNo || '',
+        vehicleModel: existing.vehicleModel || '',
+        rtoName: existing.rtoName || '',
+        workType: existing.workType || '',
+        fileNumber: existing.fileNumber || '',
+        extraAmount,
+        dealAmount,
+        amount,
+      });
+    }
+
+    if (seen.size !== byFileId.size) {
+      throw ApiError.badRequest('All existing invoice lines must be included when updating lines');
+    }
+
+    // Verify linked files still exist; do not overwrite detailed expenses.
+    for (const line of nextLines) {
+      const file = await File.findById(line.fileId).select('_id');
+      if (!file) {
+        throw ApiError.badRequest(`File not found for line ${line.fileNumber || line.fileId}`);
+      }
+    }
+
+    invoice.lines = nextLines;
+    invoice.totalAmount = nextLines.reduce((sum, line) => sum + parseMoney(line.amount), 0);
+    invoice.markModified('lines');
+  }
+
   const totalAmount = parseMoney(invoice.totalAmount);
+  let receivedAmount = hasReceived
+    ? parseMoney(body.receivedAmount)
+    : parseMoney(invoice.receivedAmount);
+
   if (receivedAmount > totalAmount) {
-    throw ApiError.badRequest('receivedAmount cannot exceed invoice total');
+    receivedAmount = totalAmount;
+  }
+  invoice.receivedAmount = receivedAmount;
+
+  await invoice.save();
+  return invoice.toJSON();
+}
+
+/**
+ * Re-open invoice line files for billing (paymentDone = false).
+ * Keeps the original invoice document unchanged (history / PDF stay as-is).
+ * Optional body.fileIds — subset of this invoice's lines; default = all lines.
+ */
+async function reopenInvoiceFilesForBilling(user, dealerId, invoiceId, body = {}) {
+  if (user?.role !== 'superadmin') {
+    throw ApiError.forbidden('Only an admin can re-open invoice files for billing');
+  }
+  if (!isValidObjectId(dealerId) || !isValidObjectId(invoiceId)) {
+    throw ApiError.badRequest('Invalid id');
   }
 
-  invoice.receivedAmount = receivedAmount;
-  await invoice.save();
-  // Do not set file paymentDone here — admins may mark files Unpaid to re-bill on a new invoice.
-  return invoice.toJSON();
+  const invoice = await DealerInvoice.findOne({
+    _id: invoiceId,
+    dealerId: toObjectId(dealerId),
+  });
+  if (!invoice) throw ApiError.notFound('Invoice not found');
+
+  const lineFileIds = (invoice.lines || [])
+    .map((line) => String(line.fileId || ''))
+    .filter((id) => isValidObjectId(id));
+
+  if (!lineFileIds.length) {
+    throw ApiError.badRequest('This invoice has no file lines to re-open');
+  }
+
+  const requested = Array.isArray(body.fileIds)
+    ? body.fileIds.map((id) => String(id || '')).filter((id) => isValidObjectId(id))
+    : [];
+
+  let targetIds = lineFileIds;
+  if (requested.length) {
+    const allowed = new Set(lineFileIds);
+    targetIds = [...new Set(requested.filter((id) => allowed.has(id)))];
+    if (!targetIds.length) {
+      throw ApiError.badRequest('None of the selected files belong to this invoice');
+    }
+  }
+
+  const objectIds = targetIds.map((id) => toObjectId(id)).filter(Boolean);
+  const result = await File.updateMany(
+    { _id: { $in: objectIds } },
+    { $set: { paymentDone: false } }
+  );
+
+  return {
+    invoiceId: String(invoice._id),
+    dealerId: String(invoice.dealerId),
+    billNumber: invoice.billNumber,
+    fileIds: targetIds,
+    filesReopened: Number(result.modifiedCount) || 0,
+    filesMatched: Number(result.matchedCount) || 0,
+  };
 }
 
 /** Backfill paymentDone for files on saved invoices (e.g. before mark-on-create fix). */
@@ -394,6 +519,7 @@ module.exports = {
   getInvoice,
   createInvoice,
   updateInvoiceReceived,
+  reopenInvoiceFilesForBilling,
   peekNextBillNumber,
   repairInvoicedFilesPaymentDone,
 };

@@ -126,6 +126,16 @@ async function updateDealerBillingInvoiceReceived(req, res) {
   return res.status(200).json({ invoice });
 }
 
+async function reopenDealerBillingInvoiceFiles(req, res) {
+  const result = await dealerInvoiceService.reopenInvoiceFilesForBilling(
+    req.user,
+    req.params.dealerId,
+    req.params.invoiceId,
+    req.body || {}
+  );
+  return res.status(200).json(result);
+}
+
 module.exports = {
   list,
   listBillingPick,
@@ -143,4 +153,5 @@ module.exports = {
   getDealerBillingInvoice,
   createDealerBillingInvoice,
   updateDealerBillingInvoiceReceived,
+  reopenDealerBillingInvoiceFiles,
 };

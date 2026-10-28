@@ -132,6 +132,7 @@ async function buildExcelTemplateBuffer() {
       urgent: 0,
       cngAdjustment: 0,
       mobNoUpdate: 0,
+      lateInvoice: 0,
       setDeal: 2500,
       paymentDone: 'No',
     });
@@ -168,6 +169,7 @@ async function buildExcelTemplateBuffer() {
       'urgent',
       'cngAdjustment',
       'mobNoUpdate',
+      'lateInvoice',
       'setDeal',
     ].forEach((key) => {
       sheet.getColumn(key).numFmt = '#,##0.00';
@@ -328,6 +330,7 @@ function rowToPayload(row, columnMap) {
     urgent: excelAmount(raw.urgent),
     cngAdjustment: excelAmount(raw.cngAdjustment),
     mobNoUpdate: excelAmount(raw.mobNoUpdate),
+    lateInvoice: excelAmount(raw.lateInvoice),
     setDeal: excelAmount(raw.setDeal),
   };
   // Empty / missing Payment Done → No (false)
@@ -410,6 +413,7 @@ function buildFailedRow(rowNumber, filePayload, expenses, paymentDone, error) {
       urgent: expenses?.urgent ?? 0,
       cngAdjustment: expenses?.cngAdjustment ?? 0,
       mobNoUpdate: expenses?.mobNoUpdate ?? 0,
+      lateInvoice: expenses?.lateInvoice ?? 0,
       setDeal: expenses?.setDeal ?? 0,
       paymentDone: paymentDone ? 'Yes' : 'No',
     },
@@ -493,7 +497,7 @@ async function importFilesFromExcel(user, buffer) {
       parsed = rowToPayload(row, columnMap);
     } catch (err) {
       errors.push(
-        buildFailedRow(rowNumber, {}, { challan: 0, adjustment: 0, puc: 0, hsrp: 0, insurance: 0, roadTax: 0, permitCancel: 0, duplicatePermit: 0, newPermit: 0, pTax: 0, urgent: 0, cngAdjustment: 0, mobNoUpdate: 0, setDeal: 0 }, false, err.message || 'Failed to read row')
+        buildFailedRow(rowNumber, {}, { challan: 0, adjustment: 0, puc: 0, hsrp: 0, insurance: 0, roadTax: 0, permitCancel: 0, duplicatePermit: 0, newPermit: 0, pTax: 0, urgent: 0, cngAdjustment: 0, mobNoUpdate: 0, lateInvoice: 0, setDeal: 0 }, false, err.message || 'Failed to read row')
       );
       continue;
     }

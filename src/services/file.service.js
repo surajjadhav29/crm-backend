@@ -1000,7 +1000,7 @@ async function updateExpenses(user, id, body) {
     expenses.setDeal = Number(file.expenses?.setDeal) || 0;
   }
 
-  // Persist every expense line (incl. cngAdjustment / mobNoUpdate) into MongoDB.
+  // Persist every expense line (incl. cngAdjustment / mobNoUpdate / lateInvoice) into MongoDB.
   file.set('expenses', expenses);
   file.markModified('expenses');
   file.totalBill = sumExpenses(expenses);

@@ -16,6 +16,7 @@ const expensesSchema = new mongoose.Schema(
     urgent: { type: Number, default: 0 },
     cngAdjustment: { type: Number, default: 0 },
     mobNoUpdate: { type: Number, default: 0 },
+    lateInvoice: { type: Number, default: 0 },
     setDeal: { type: Number, default: 0 },
   },
   { _id: false }

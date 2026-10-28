@@ -64,6 +64,7 @@ const EXPENSE_FIELDS = [
   'urgent',
   'cngAdjustment',
   'mobNoUpdate',
+  'lateInvoice',
   'setDeal',
 ];
 
