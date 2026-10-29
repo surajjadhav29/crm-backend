@@ -226,6 +226,8 @@ function mapHeaderRow(headerRow) {
   const headerToKey = new Map(
     EXCEL_COLUMNS.map((col) => [normalizeHeader(col.header), col.key])
   );
+  // Legacy header alias after rename Late Invoice → LATE N.O.C
+  headerToKey.set(normalizeHeader('Late Invoice'), 'lateInvoice');
 
   const columnMap = {};
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
